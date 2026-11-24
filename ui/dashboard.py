@@ -18,7 +18,6 @@ from core.diagnostics import (
     RESET_COOLDOWN_SEC,
     BaselineTracker,
     CsvTelemetryLogger,
-    build_human_diagnosis,
     compute_line_grade,
 )
 from core.probes import (
@@ -42,20 +41,28 @@ from core.probes import (
 POLL_INTERVAL_SEC = 1.0
 SPEEDTEST_DURATION_SEC = 5.0
 
-# Palette ad alto contrasto
-BG_MAIN = "#0b1120"
-BG_CARD = "#111827"
-BG_ELEV = "#1e293b"
-BG_HOVER = "#2c3b52"
+# Palette Moderna (Slate & Soft Blue)
+BG_APP = "#0f172a"
+BG_CARD = "#1e293b"
+BG_CARD_ALT = "#263349"
+BG_HOVER = "#334155"
 BORDER = "#334155"
-FG_TEXT = "#f8fafc"
-FG_SUB = "#cbd5e1"
+FG_PRIMARY = "#f8fafc"
+FG_SECONDARY = "#cbd5e1"
 FG_MUTED = "#94a3b8"
-COL_OK = "#10b981"
-COL_WARN = "#f59e0b"
-COL_ERR = "#ef4444"
-COL_ACCENT = "#38bdf8"
-COL_PURPLE = "#a78bfa"
+
+ACCENT_BLUE = "#3b82f6"
+ACCENT_BLUE_HOVER = "#2563eb"
+ACCENT_CYAN = "#38bdf8"
+ACCENT_PURPLE = "#8b5cf6"
+ACCENT_PURPLE_HOVER = "#7c3aed"
+
+STATUS_OK = "#10b981"
+STATUS_OK_BG = "#064e3b"
+STATUS_WARN = "#f59e0b"
+STATUS_WARN_BG = "#78350f"
+STATUS_ERR = "#ef4444"
+STATUS_ERR_BG = "#7f1d1d"
 
 
 def enable_high_dpi() -> None:
@@ -66,7 +73,7 @@ def enable_high_dpi() -> None:
 
 
 class ToolTip:
-    """Mostra un fumetto esplicativo al passaggio del mouse su qualsiasi widget."""
+    """Fumetto esplicativo leggero al passaggio del mouse."""
 
     def __init__(self, widget: tk.Widget, text: str) -> None:
         self.widget = widget
@@ -79,21 +86,21 @@ class ToolTip:
     def _show(self, _event=None) -> None:
         if self.tip_win or not self.text:
             return
-        x = self.widget.winfo_rootx() + 14
+        x = min(self.widget.winfo_rootx() + 12, self.widget.winfo_screenwidth() - 340)
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         self.tip_win = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
-        frame = tk.Frame(tw, bg="#0f172a", highlightbackground=COL_ACCENT, highlightthickness=1, padx=10, pady=6)
+        frame = tk.Frame(tw, bg="#0b1120", highlightbackground=ACCENT_CYAN, highlightthickness=1, padx=10, pady=6)
         frame.pack()
         tk.Label(
             frame,
             text=self.text,
             justify="left",
-            bg="#0f172a",
-            fg=FG_TEXT,
+            bg="#0b1120",
+            fg=FG_PRIMARY,
             font=("Segoe UI", 9),
-            wraplength=340,
+            wraplength=310,
         ).pack()
 
     def _hide(self, _event=None) -> None:
@@ -102,20 +109,84 @@ class ToolTip:
             self.tip_win = None
 
 
+def build_friendly_status(
+    r_ms: float | None,
+    i_ms: float | None,
+    jitter: float,
+    loss_pct: float,
+    dns_ms: float | None,
+    down_mbps: float,
+    top_app: str,
+    warn_ms: float,
+) -> tuple[str, str, str, str]:
+    """Restituisce (livello: 'ok'|'warn'|'err', icona, titolo_grande, sottotitolo_amichevole)."""
+    if r_ms is None:
+        return (
+            "err",
+            "🔌",
+            "Nessun collegamento con il Modem",
+            "Il PC non raggiunge il router di casa. Controlla il cavo di rete o verifica che il Wi-Fi sia attivo.",
+        )
+    if i_ms is None:
+        return (
+            "err",
+            "🌐",
+            "Modem OK, ma manca Internet",
+            "Il segnale in casa funziona, ma la linea dell'operatore è assente. Attendi un minuto o riavvia il modem.",
+        )
+    if dns_ms is None:
+        return (
+            "warn",
+            "🔎",
+            "I siti web non si aprono (Errore DNS)",
+            "La linea è attiva ma i server DNS non rispondono. Vai su 'Ripara & DNS' e attiva i DNS Cloudflare.",
+        )
+    if loss_pct > 0:
+        return (
+            "err",
+            "⚠️",
+            f"Connessione instabile ({loss_pct:.0f}% dati persi)",
+            "Alcuni pacchetti non arrivano a destinazione. Controlla eventuali download pesanti o il cavo Ethernet.",
+        )
+    if i_ms > warn_ms or jitter > JITTER_WARN_MS:
+        if down_mbps >= 15.0:
+            app_txt = f" da {top_app}" if top_app else ""
+            return (
+                "warn",
+                "📥",
+                f"Linea occupata da un download ({down_mbps:.0f} Mbps)",
+                f"Nessun guasto: stai scaricando dati{app_txt}. Il ping tornerà basso appena il download rallenta.",
+            )
+        return (
+            "warn",
+            "🐢",
+            f"Connessione un po' lenta ({i_ms:.0f} ms)",
+            "Il modem in casa risponde bene, ma la rete esterna dell'operatore è più lenta del solito.",
+        )
+    return (
+        "ok",
+        "✨",
+        "Connessione Veloce e Stabile",
+        "Tutto funziona al meglio: puoi navigare, guardare video in 4K e giocare online senza interruzioni.",
+    )
+
+
 class DottorModemApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Dottor Modem v8.0 — Diagnostica Rete & Speedtest")
-        self.root.geometry("1240x800")
-        self.root.minsize(1020, 700)
-        self.root.configure(bg=BG_MAIN)
+        self.root.title("Dottor Modem")
+        self.root.geometry("980x660")
+        self.root.minsize(880, 600)
+        self.root.configure(bg=BG_APP)
 
         self.running = True
         self.paused = False
         self.compact_mode = False
         self.always_on_top = False
+        self.active_page = "home"
         self.lock = threading.Lock()
         self.last_reset_ts = 0.0
+
         self.csv_logger = CsvTelemetryLogger(LOG_FILE, flush_interval_sec=15.0)
         self.baseline = BaselineTracker(maxlen=40)
 
@@ -124,7 +195,7 @@ class DottorModemApp:
         self.speedtest_live_mbps = 0.0
         self.speedtest_last_mbps: float | None = None
         self.speedtest_banner_until = 0.0
-        self.speedtest_banner_data: tuple[str, str, str] | None = None
+        self.speedtest_banner_data: tuple[str, str, str, str] | None = None
 
         self.router_ip = get_default_gateway()
         self.iface_name = get_active_interface_name()
@@ -135,33 +206,30 @@ class DottorModemApp:
         self.dns_servers = get_current_dns_servers(self.iface_name)
         self.dns_label, self.dns_kind = describe_dns_provider(self.dns_servers)
 
-        self.hist_internet: deque[float | None] = deque([None] * 90, maxlen=90)
-        self.hist_router: deque[float | None] = deque([None] * 90, maxlen=90)
-        self.hist_jitter: deque[float | None] = deque([None] * 90, maxlen=90)
-        self.hist_down_mbps: deque[float] = deque([0.0] * 90, maxlen=90)
-
+        self.hist_internet: deque[float | None] = deque([None] * 60, maxlen=60)
         self.win_inet: deque[float] = deque(maxlen=15)
         self.win_outcomes: deque[bool] = deque(maxlen=25)
         self.win_jitters: deque[float] = deque(maxlen=30)
 
         self.all_valid_inet: list[float] = []
-        self.total_rx_mb = 0.0
         self.suspects: list[tuple[str, str, int]] = []
-        self.pending_logs: deque[tuple[str, str]] = deque(maxlen=120)
+        self.pending_logs: deque[tuple[str, str]] = deque(maxlen=100)
 
         self.latest_snapshot = {
             "level": "AVVIO",
-            "diag_sev": "ok",
-            "diag_title": "⏳ Avvio controlli diagnostici in corso...",
-            "diag_advice": "Attendi 2 secondi per la prima misurazione completa della linea.",
+            "sev": "ok",
+            "icon": "⏳",
+            "title": "Controllo della linea in corso...",
+            "subtitle": "Attendi un paio di secondi per la prima analisi completa.",
             "inet_ms": None,
             "router_ms": None,
             "jitter_ms": 0.0,
             "loss_pct": 0.0,
             "dns_ms": None,
-            "grade": "Analisi...",
+            "grade": "A+",
             "down_mbs": 0.0,
-            "up_mbs": 0.0,
+            "down_mbps": 0.0,
+            "up_mbps": 0.0,
             "hw_errors": 0,
             "baseline_ms": None,
             "warn_ms": DEFAULT_LATENCY_WARN_MS,
@@ -169,9 +237,10 @@ class DottorModemApp:
 
         self._setup_styles()
         self._build_ui()
-        self._update_dns_ui_state()
+        self._update_dns_labels()
+        self._switch_page("home")
 
-        self.log_message("AVVIO", f"Diagnostica avviata | Scheda: {self.iface_name} | Modem: {self.router_ip} | DNS: {self.dns_label}")
+        self.log_message("INFO", f"Dottor Modem avviato su {self.iface_name} (Modem: {self.router_ip})")
 
         self.worker = threading.Thread(target=self._monitor_worker, daemon=True)
         self.worker.start()
@@ -183,46 +252,35 @@ class DottorModemApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
-            "Dark.Treeview",
+            "Clean.Treeview",
             background=BG_CARD,
-            foreground=FG_TEXT,
+            foreground=FG_PRIMARY,
             fieldbackground=BG_CARD,
             borderwidth=0,
-            rowheight=27,
+            rowheight=30,
             font=("Segoe UI", 9),
         )
         style.configure(
-            "Dark.Treeview.Heading",
-            background=BG_ELEV,
-            foreground=COL_ACCENT,
+            "Clean.Treeview.Heading",
+            background=BG_CARD_ALT,
+            foreground=FG_SECONDARY,
             relief="flat",
             font=("Segoe UI", 9, "bold"),
         )
-        style.map("Dark.Treeview", background=[("selected", "#334155")])
+        style.map("Clean.Treeview", background=[("selected", BG_HOVER)])
 
-        style.configure("Dark.TNotebook", background=BG_CARD, borderwidth=0)
-        style.configure(
-            "Dark.TNotebook.Tab",
-            background=BG_ELEV,
-            foreground=FG_MUTED,
-            padding=[12, 7],
-            font=("Segoe UI", 9, "bold"),
-        )
-        style.map(
-            "Dark.TNotebook.Tab",
-            background=[("selected", BG_CARD)],
-            foreground=[("selected", COL_ACCENT)],
-        )
-
-    def _make_button(
+    def _make_btn(
         self,
         parent: tk.Widget,
         text: str,
         command,
-        tooltip: str,
-        bg: str = BG_ELEV,
-        fg: str = FG_TEXT,
+        bg: str = BG_CARD_ALT,
+        fg: str = FG_PRIMARY,
         hover_bg: str = BG_HOVER,
+        padx: int = 14,
+        pady: int = 7,
+        font_size: int = 9,
+        tooltip: str = "",
     ) -> tk.Button:
         btn = tk.Button(
             parent,
@@ -234,517 +292,612 @@ class DottorModemApp:
             activeforeground=fg,
             relief="flat",
             bd=0,
-            padx=12,
-            pady=6,
-            font=("Segoe UI", 9, "bold"),
+            padx=padx,
+            pady=pady,
+            font=("Segoe UI", font_size, "bold"),
             cursor="hand2",
         )
+        btn._base_bg = bg  # type: ignore[attr-defined]
         btn.bind("<Enter>", lambda _e: btn.configure(bg=hover_bg), add="+")
-        btn.bind("<Leave>", lambda _e: self._restore_btn_color(btn, bg), add="+")
-        btn._default_bg = bg  # type: ignore[attr-defined]
-        ToolTip(btn, tooltip)
+        btn.bind("<Leave>", lambda _e: btn.configure(bg=getattr(btn, "_base_bg", bg)), add="+")
+        if tooltip:
+            ToolTip(btn, tooltip)
         return btn
 
-    def _restore_btn_color(self, btn: tk.Button, fallback_bg: str) -> None:
-        btn.configure(bg=getattr(btn, "_default_bg", fallback_bg))
-
     def _build_ui(self) -> None:
-        # --- 1. INTESTAZIONE ---
-        header = tk.Frame(self.root, bg=BG_MAIN, padx=18, pady=10)
-        header.pack(fill="x")
+        # ==========================================
+        # BARRA SUPERIORE PULITA (NAVIGAZIONE)
+        # ==========================================
+        navbar = tk.Frame(self.root, bg=BG_APP, padx=24, pady=14)
+        navbar.pack(fill="x")
 
-        left_hdr = tk.Frame(header, bg=BG_MAIN)
-        left_hdr.pack(side="left")
+        # Brand a sinistra
+        brand = tk.Frame(navbar, bg=BG_APP)
+        brand.pack(side="left")
+        tk.Label(brand, text="◉", bg=BG_APP, fg=ACCENT_CYAN, font=("Segoe UI", 15, "bold")).pack(side="left")
+        tk.Label(brand, text=" Dottor Modem", bg=BG_APP, fg=FG_PRIMARY, font=("Segoe UI", 13, "bold")).pack(side="left")
 
-        title_row = tk.Frame(left_hdr, bg=BG_MAIN)
-        title_row.pack(anchor="w")
-        tk.Label(title_row, text="DOTTOR MODEM", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 16, "bold")).pack(side="left")
-        tk.Label(title_row, text="  v8.0", bg=BG_MAIN, fg=COL_ACCENT, font=("Segoe UI", 11, "bold")).pack(side="left", pady=(3, 0))
+        # Selettore Pagine al centro
+        self.nav_frame = tk.Frame(navbar, bg=BG_CARD, padx=4, pady=4)
+        self.nav_frame.pack(side="left", padx=(36, 0))
 
-        self.lbl_subhdr = tk.Label(
-            left_hdr,
-            text=f"Connessione: {self.iface_name}   •   Modem: {self.router_ip}   •   DNS: {self.dns_label}",
-            bg=BG_MAIN,
-            fg=FG_MUTED,
-            font=("Segoe UI", 9),
-        )
-        self.lbl_subhdr.pack(anchor="w", pady=(2, 0))
-
-        right_hdr = tk.Frame(header, bg=BG_MAIN)
-        right_hdr.pack(side="right")
-
-        self.btn_compact = self._make_button(
-            right_hdr,
-            "🗗 Compatta",
-            self._action_toggle_compact,
-            "Passa alla Modalità Compatta (Mini-Monitor) con solo Diagnosi, Ping e Download.",
-            bg=BG_ELEV,
-            fg=FG_SUB,
-        )
-        self.btn_compact.pack(side="left", padx=(0, 8))
-
-        if not self.is_admin:
-            btn_adm = self._make_button(
-                right_hdr,
-                "⚡ Sblocca DNS (Admin)",
-                self._action_elevate_admin,
-                "Riavvia Dottor Modem come Amministratore di Windows per poter cambiare i server DNS con un clic.",
-                bg="#78350f",
-                fg="#fde68a",
-                hover_bg="#92400e",
+        self.nav_buttons: dict[str, tk.Button] = {}
+        for page_id, label in (
+            ("home", "🏠  Panoramica"),
+            ("tools", "🛠️  Ripara & DNS"),
+            ("details", "📋  Dettagli"),
+        ):
+            b = tk.Button(
+                self.nav_frame,
+                text=label,
+                command=lambda p=page_id: self._switch_page(p),
+                bg=BG_CARD,
+                fg=FG_MUTED,
+                activebackground=BG_CARD_ALT,
+                activeforeground=FG_PRIMARY,
+                relief="flat",
+                bd=0,
+                padx=14,
+                pady=5,
+                font=("Segoe UI", 9, "bold"),
+                cursor="hand2",
             )
-            btn_adm.pack(side="left", padx=(0, 8))
+            b.pack(side="left", padx=2)
+            self.nav_buttons[page_id] = b
 
-        self.lbl_badge = tk.Label(
-            right_hdr,
-            text="  AVVIO  ",
-            bg="#1e3a5f",
-            fg=COL_ACCENT,
-            font=("Segoe UI", 10, "bold"),
-            padx=14,
-            pady=6,
-        )
-        self.lbl_badge.pack(side="left")
+        # Controlli finestra a destra
+        right_nav = tk.Frame(navbar, bg=BG_APP)
+        right_nav.pack(side="right")
 
-        # --- 2. BANNER DIAGNOSI IN TEMPO REALE ---
-        self.diag_box = tk.Frame(
-            self.root,
-            bg="#064e3b",
-            highlightbackground=COL_OK,
-            highlightthickness=1,
-            padx=16,
-            pady=10,
-        )
-        self.diag_box.pack(fill="x", padx=18, pady=(0, 10))
-
-        self.lbl_diag_title = tk.Label(
-            self.diag_box,
-            text="⏳ Avvio controlli diagnostici in corso...",
-            bg="#064e3b",
-            fg="#ffffff",
-            font=("Segoe UI", 11, "bold"),
-            anchor="w",
-        )
-        self.lbl_diag_title.pack(fill="x")
-
-        self.lbl_diag_advice = tk.Label(
-            self.diag_box,
-            text="Attendi 2 secondi per la prima misurazione completa della linea.",
-            bg="#064e3b",
-            fg="#d1fae5",
-            font=("Segoe UI", 9),
-            anchor="w",
-        )
-        self.lbl_diag_advice.pack(fill="x", pady=(2, 0))
-
-        # --- BARRA MINI-MONITOR (VISIBILE SOLO IN MODALITÀ COMPATTA) ---
-        self.compact_bar = tk.Frame(
-            self.root,
+        self.lbl_pill_status = tk.Label(
+            right_nav,
+            text="●  Verifica...",
             bg=BG_CARD,
-            highlightbackground=BORDER,
-            highlightthickness=1,
-            padx=14,
-            pady=8,
+            fg=ACCENT_CYAN,
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=5,
         )
-        self.lbl_compact_stats = tk.Label(
-            self.compact_bar,
-            text="Ping Internet: -- ms   •   Modem: -- ms   •   Download: 0.0 MB/s   •   Voto: --",
-            bg=BG_CARD,
-            fg=FG_TEXT,
-            font=("Segoe UI", 10, "bold"),
-        )
-        self.lbl_compact_stats.pack(side="left")
+        self.lbl_pill_status.pack(side="left", padx=(0, 8))
 
-        self.btn_pin = self._make_button(
-            self.compact_bar,
-            "📌 Primo Piano",
+        self.btn_compact = self._make_btn(
+            right_nav,
+            "🗗 Mini",
+            self._action_toggle_compact,
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            padx=10,
+            pady=5,
+            tooltip="Riduci a una piccola barra compatta da tenere in un angolo dello schermo.",
+        )
+        self.btn_compact.pack(side="left")
+
+        # ==========================================
+        # VISTA MINI-MONITOR (SOLO IN MODALITÀ COMPATTA)
+        # ==========================================
+        self.compact_view = tk.Frame(self.root, bg=BG_CARD, padx=20, pady=14)
+        top_c = tk.Frame(self.compact_view, bg=BG_CARD)
+        top_c.pack(fill="x")
+        self.lbl_compact_title = tk.Label(
+            top_c, text="✨ Connessione Veloce e Stabile", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 11, "bold")
+        )
+        self.lbl_compact_title.pack(side="left")
+
+        self.btn_pin = self._make_btn(
+            top_c,
+            "📌 Fissa sopra",
             self._action_toggle_topmost,
-            "Mantiene la finestra compatta sempre sopra le altre finestre.",
-            bg=BG_ELEV,
-            fg=FG_SUB,
+            bg=BG_CARD_ALT,
+            fg=FG_SECONDARY,
+            padx=10,
+            pady=3,
+            font_size=8,
         )
-        self.btn_pin.configure(padx=9, pady=4, font=("Segoe UI", 8, "bold"))
         self.btn_pin.pack(side="right")
 
-        # --- CONTENITORE DASHBOARD COMPLETA ---
-        self.full_body = tk.Frame(self.root, bg=BG_MAIN)
-        self.full_body.pack(fill="both", expand=True)
-
-        # --- 3. PANNELLO PULSANTI SNELLO ---
-        actions_wrapper = tk.Frame(self.full_body, bg=BG_MAIN, padx=18, pady=0)
-        actions_wrapper.pack(fill="x", pady=(0, 8))
-        actions_wrapper.columnconfigure(0, weight=42)
-        actions_wrapper.columnconfigure(1, weight=58)
-
-        # Card Sinistra: DNS Unificato
-        dns_card = tk.Frame(actions_wrapper, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=12, pady=9)
-        dns_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-
-        dns_top = tk.Frame(dns_card, bg=BG_CARD)
-        dns_top.pack(fill="x", pady=(0, 6))
-        tk.Label(dns_top, text="SERVER DNS", bg=BG_CARD, fg=FG_MUTED, font=("Segoe UI", 8, "bold")).pack(side="left")
-        self.lbl_dns_pill = tk.Label(dns_top, text=self.dns_label, bg="#0f172a", fg=COL_ACCENT, padx=8, pady=2, font=("Segoe UI", 8, "bold"))
-        self.lbl_dns_pill.pack(side="right")
-
-        dns_btns = tk.Frame(dns_card, bg=BG_CARD)
-        dns_btns.pack(fill="x")
-
-        self.btn_dns_cycle = self._make_button(
-            dns_btns,
-            "🌐 Cambia DNS (Cloudflare / Google / Auto)",
-            self._action_cycle_dns,
-            "Alterna con un clic tra DNS Cloudflare (1.1.1.1), Google (8.8.8.8) e Automatico (DHCP), svuotando la cache DNS.",
-            bg="#0284c7",
-            fg="#ffffff",
-            hover_bg="#0369a1",
+        self.lbl_compact_metrics = tk.Label(
+            self.compact_view,
+            text="Velocità: 0.0 Mbps   •   Ping: -- ms   •   Stabilità: 100%",
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 9),
         )
-        self.btn_dns_cycle.pack(side="left", padx=(0, 8))
+        self.lbl_compact_metrics.pack(anchor="w", pady=(6, 0))
 
-        self._make_button(
-            dns_btns,
-            "🧹 Pulisci Cache",
-            self._action_flush_dns,
-            "Cancella gli indirizzi web memorizzati su Windows (ipconfig /flushdns) senza disconnetterti.",
-        ).pack(side="left")
+        # ==========================================
+        # CONTENITORE PRINCIPALE DELLE 3 PAGINE
+        # ==========================================
+        self.pages_container = tk.Frame(self.root, bg=BG_APP, padx=24, pady=4)
+        self.pages_container.pack(fill="both", expand=True)
 
-        # Card Destra: Test & Riparazione
-        fix_card = tk.Frame(actions_wrapper, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=12, pady=9)
-        fix_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self.page_home = tk.Frame(self.pages_container, bg=BG_APP)
+        self.page_tools = tk.Frame(self.pages_container, bg=BG_APP)
+        self.page_details = tk.Frame(self.pages_container, bg=BG_APP)
 
-        fix_top = tk.Frame(fix_card, bg=BG_CARD)
-        fix_top.pack(fill="x", pady=(0, 6))
-        tk.Label(fix_top, text="TEST VELOCITÀ E DIAGNOSTICA", bg=BG_CARD, fg=FG_MUTED, font=("Segoe UI", 8, "bold")).pack(side="left")
+        self._build_page_home()
+        self._build_page_tools()
+        self._build_page_details()
 
-        self.btn_target = self._make_button(
-            fix_top,
-            "Server Test: 1.1.1.1 ↻",
-            self._action_cycle_target,
-            "Clicca per cambiare il server esterno usato per misurare il ping (Cloudflare, Google o Quad9).",
-            bg="#0f172a",
-            fg=FG_SUB,
-            hover_bg=BG_ELEV,
+    # ------------------------------------------
+    # PAGINA 1: PANORAMICA (SEMPLICE E ARIOSA)
+    # ------------------------------------------
+    def _build_page_home(self) -> None:
+        # 1. Hero Card Centrale
+        self.hero_card = tk.Frame(self.page_home, bg=BG_CARD, padx=24, pady=20)
+        self.hero_card.pack(fill="x", pady=(0, 16))
+
+        hero_left = tk.Frame(self.hero_card, bg=BG_CARD)
+        hero_left.pack(side="left", fill="both", expand=True)
+
+        title_line = tk.Frame(hero_left, bg=BG_CARD)
+        title_line.pack(anchor="w")
+
+        self.lbl_hero_icon = tk.Label(title_line, text="⏳", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 20))
+        self.lbl_hero_icon.pack(side="left", padx=(0, 10))
+
+        self.lbl_hero_title = tk.Label(
+            title_line,
+            text="Controllo della linea in corso...",
+            bg=BG_CARD,
+            fg=FG_PRIMARY,
+            font=("Segoe UI", 16, "bold"),
         )
-        self.btn_target.configure(padx=8, pady=1, font=("Segoe UI", 8, "bold"))
-        self.btn_target.pack(side="right")
+        self.lbl_hero_title.pack(side="left")
 
-        fix_btns = tk.Frame(fix_card, bg=BG_CARD)
-        fix_btns.pack(fill="x")
+        self.lbl_hero_sub = tk.Label(
+            hero_left,
+            text="Attendi un paio di secondi per la prima analisi completa.",
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 10),
+            wraplength=540,
+            justify="left",
+        )
+        self.lbl_hero_sub.pack(anchor="w", pady=(6, 0))
 
-        self.btn_speedtest = self._make_button(
-            fix_btns,
-            "🚀 Speedtest (5s)",
+        # Azioni principali a destra nella Hero Card
+        hero_actions = tk.Frame(self.hero_card, bg=BG_CARD)
+        hero_actions.pack(side="right", padx=(16, 0))
+
+        self.btn_speedtest = self._make_btn(
+            hero_actions,
+            "🚀  Misura Velocità (5s)",
             self._action_run_speedtest,
-            "Scarica un file di prova per 5 secondi per misurare i Mbps reali e verificare il Bufferbloat sotto carico.",
-            bg="#5b21b6",
+            bg=ACCENT_BLUE,
             fg="#ffffff",
-            hover_bg="#6d28d9",
+            hover_bg=ACCENT_BLUE_HOVER,
+            padx=18,
+            pady=10,
+            font_size=10,
+            tooltip="Esegue uno speedtest rapido di 5 secondi per misurare i Mbps reali della tua linea.",
         )
-        self.btn_speedtest.pack(side="left", padx=(0, 6))
+        self.btn_speedtest.pack(fill="x", pady=(0, 8))
 
-        self._make_button(
-            fix_btns,
-            "🧭 Controlla Nodi",
-            self._action_run_tracert,
-            "Esegue un tracciamento (tracert) per scoprire se un rallentamento dipende dal tuo modem o dalla rete dell'operatore.",
-        ).pack(side="left", padx=(0, 6))
-
-        self._make_button(
-            fix_btns,
-            "🔄 Reset Scheda",
-            self._action_full_reset,
-            "Rinnova l'indirizzo IP locale e resetta la connessione del PC (interrompe per 5 secondi i download).",
-            fg="#fca5a5",
-        ).pack(side="left", padx=(0, 6))
-
-        self.btn_pause = self._make_button(
-            fix_btns,
-            "⏸ Pausa",
-            self._action_toggle_pause,
-            "Mette in pausa o riprende il monitoraggio ogni secondo.",
+        self.btn_quick_dns = self._make_btn(
+            hero_actions,
+            "🌐  DNS: Verifica...",
+            self._action_cycle_dns,
+            bg=BG_CARD_ALT,
+            fg=FG_SECONDARY,
+            padx=14,
+            pady=6,
+            font_size=9,
+            tooltip="Clicca per passare rapidamente tra DNS Cloudflare (1.1.1.1), Google (8.8.8.8) e Automatico.",
         )
-        self.btn_pause.pack(side="right")
+        self.btn_quick_dns.pack(fill="x")
 
-        # --- 4. 5 SCHEDE KPI ---
-        kpi_frame = tk.Frame(self.full_body, bg=BG_MAIN, padx=18, pady=2)
-        kpi_frame.pack(fill="x")
-        for i in range(5):
-            kpi_frame.columnconfigure(i, weight=1, uniform="kpi")
+        # 2. 3 Schede Grandi e Leggibili
+        cards_row = tk.Frame(self.page_home, bg=BG_APP)
+        cards_row.pack(fill="x", pady=(0, 16))
+        for col in range(3):
+            cards_row.columnconfigure(col, weight=1, uniform="home_cards")
 
-        self.kpi_inet_val, self.kpi_inet_sub = self._create_kpi_card(
-            kpi_frame,
+        self.card_speed_val, self.card_speed_sub = self._create_big_metric(
+            cards_row,
             0,
-            "TEMPO RISPOSTA INTERNET",
-            "-- ms",
-            "Min: -- | Base: -- | Max: --",
-            5,
-            "Ping verso Internet con baseline dinamica calcolata automaticamente a riposo.",
-        )
-        self.kpi_router_val, self.kpi_router_sub = self._create_kpi_card(
-            kpi_frame,
-            1,
-            "RISPOSTA MODEM IN CASA",
-            "-- ms",
-            f"IP: {self.router_ip}",
-            5,
-            "Tempo di risposta del tuo modem/router: 1-5 ms via cavo (o 2-15 ms in Wi-Fi).",
-        )
-        self.kpi_bw_val, self.kpi_bw_sub = self._create_kpi_card(
-            kpi_frame,
-            2,
             "VELOCITÀ SCARICAMENTO",
-            "0.0 MB/s",
-            "Invio: 0.0 MB/s",
-            5,
-            "Velocità istantanea di scaricamento. Premi 'Speedtest (5s)' per misurare i Mbps massimi.",
+            "0.0 Mbps",
+            "In attesa di traffico o test",
+            "Velocità attuale in Megabit al secondo. Premi 'Misura Velocità (5s)' per testare il massimo.",
         )
-        self.kpi_jitter_val, self.kpi_jitter_sub = self._create_kpi_card(
-            kpi_frame,
-            3,
-            "STABILITÀ (JITTER / LOSS)",
+        self.card_ping_val, self.card_ping_sub = self._create_big_metric(
+            cards_row,
+            1,
+            "REATTIVITÀ (PING)",
             "-- ms",
-            "Dati persi: 0%",
-            5,
-            "Il Jitter misura quanto oscilla il ping: più è vicino a 0 ms, più la linea è stabile.",
+            "Modem in casa: -- ms",
+            "Più questo numero è basso (es. 10-30 ms), più i siti e i giochi rispondono all'istante.",
         )
-        self.kpi_grade_val, self.kpi_grade_sub = self._create_kpi_card(
-            kpi_frame,
-            4,
-            "VOTO QUALITÀ LINEA",
-            "Analisi...",
-            "Risposta DNS: -- ms",
-            5,
-            "Valutazione complessiva da A+ (perfetta) a F (critica) basata su ping, stabilità e perdita pacchetti.",
+        self.card_stab_val, self.card_stab_sub = self._create_big_metric(
+            cards_row,
+            2,
+            "STABILITÀ LINEA",
+            "100%",
+            "Qualità: Analisi...",
+            "Percentuale di pacchetti consegnati senza errori. 100% indica una linea perfettamente stabile.",
         )
 
-        # --- 5. CORPO CENTRALE ---
-        mid_frame = tk.Frame(self.full_body, bg=BG_MAIN, padx=18, pady=8)
-        mid_frame.pack(fill="both", expand=True)
-        mid_frame.columnconfigure(0, weight=64)
-        mid_frame.columnconfigure(1, weight=36)
-        mid_frame.rowconfigure(0, weight=1)
+        # 3. Grafico Pulito ad Area (Ultimi 60 secondi)
+        chart_box = tk.Frame(self.page_home, bg=BG_CARD, padx=18, pady=14)
+        chart_box.pack(fill="both", expand=True, pady=(0, 18))
 
-        chart_card = tk.Frame(mid_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=12, pady=10)
-        chart_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-
-        chart_hdr = tk.Frame(chart_card, bg=BG_CARD)
-        chart_hdr.pack(fill="x", pady=(0, 6))
+        chart_top = tk.Frame(chart_box, bg=BG_CARD)
+        chart_top.pack(fill="x", pady=(0, 8))
         tk.Label(
-            chart_hdr,
-            text="ANDAMENTO IN TEMPO REALE (ULTIMI 90 SECONDI)",
+            chart_top,
+            text="ANDAMENTO REATTIVITÀ (ULTIMI 60 SECONDI)",
             bg=BG_CARD,
             fg=FG_MUTED,
             font=("Segoe UI", 8, "bold"),
         ).pack(side="left")
 
-        legend = tk.Frame(chart_hdr, bg=BG_CARD)
-        legend.pack(side="right")
-        for color, label in (
-            (COL_ACCENT, "Ping Internet"),
-            (COL_WARN, "Oscillazione (Jitter)"),
-            (COL_OK, "Modem"),
-            (COL_PURPLE, "Download MB/s"),
-        ):
-            tk.Label(legend, text=f"● {label}  ", bg=BG_CARD, fg=color, font=("Segoe UI", 8, "bold")).pack(side="left")
+        self.lbl_chart_hint = tk.Label(
+            chart_top,
+            text="Linea bassa e piatta = connessione fluida",
+            bg=BG_CARD,
+            fg=ACCENT_CYAN,
+            font=("Segoe UI", 8),
+        )
+        self.lbl_chart_hint.pack(side="right")
 
-        self.canvas = tk.Canvas(chart_card, bg="#070d19", highlightthickness=0)
+        self.canvas = tk.Canvas(chart_box, bg="#131c2e", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda _e: self._draw_chart())
+        self.canvas.bind("<Configure>", lambda _e: self._draw_area_chart())
 
-        right_card = tk.Frame(mid_frame, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=8, pady=8)
-        right_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-
-        self.notebook = ttk.Notebook(right_card, style="Dark.TNotebook")
-        self.notebook.pack(fill="both", expand=True)
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-
-        tab_check = tk.Frame(self.notebook, bg=BG_CARD, padx=10, pady=10)
-        self.notebook.add(tab_check, text="🩺 Check-up Rete")
-
-        self.chk_nic = self._create_check_row(tab_check, "1. Scheda di Rete PC", f"Interfaccia: {self.iface_name}")
-        self.chk_modem = self._create_check_row(tab_check, "2. Collegamento al Modem", f"Indirizzo: {self.router_ip}")
-        self.chk_wan = self._create_check_row(tab_check, "3. Linea Internet Esterna", "Verifica verso server esterni")
-        self.chk_dns = self._create_check_row(tab_check, "4. Traduzione Nomi (DNS)", f"Attivo: {self.dns_label}")
-
-        tab_procs = tk.Frame(self.notebook, bg=BG_CARD)
-        self.notebook.add(tab_procs, text="📊 Programmi Attivi")
-
-        self.tree_procs = ttk.Treeview(
-            tab_procs,
-            columns=("proc", "kind", "tot"),
-            show="headings",
-            style="Dark.Treeview",
-        )
-        self.tree_procs.heading("proc", text="Programma")
-        self.tree_procs.heading("kind", text="Tipo Attività")
-        self.tree_procs.heading("tot", text="Conn.")
-        self.tree_procs.column("proc", anchor="w", width=155)
-        self.tree_procs.column("kind", anchor="w", width=135)
-        self.tree_procs.column("tot", anchor="center", width=50)
-        self.tree_procs.pack(fill="both", expand=True, pady=(6, 0))
-
-        tab_trace = tk.Frame(self.notebook, bg=BG_CARD)
-        self.notebook.add(tab_trace, text="🧭 Percorso Nodi")
-
-        self.tree_trace = ttk.Treeview(
-            tab_trace,
-            columns=("hop", "zone", "ms", "ip"),
-            show="headings",
-            style="Dark.Treeview",
-        )
-        self.tree_trace.heading("hop", text="#")
-        self.tree_trace.heading("zone", text="Tratta")
-        self.tree_trace.heading("ms", text="Ritardo")
-        self.tree_trace.heading("ip", text="IP Nodo")
-        self.tree_trace.column("hop", anchor="center", width=30)
-        self.tree_trace.column("zone", anchor="w", width=140)
-        self.tree_trace.column("ms", anchor="center", width=65)
-        self.tree_trace.column("ip", anchor="w", width=105)
-        self.tree_trace.pack(fill="both", expand=True, pady=(6, 0))
-        self.tree_trace.insert("", "end", values=("-", "Premi 'Controlla Nodi'", "-", "-"))
-
-        # --- 6. REGISTRO EVENTI ---
-        log_card = tk.Frame(self.full_body, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=12, pady=8)
-        log_card.pack(fill="x", padx=18, pady=(0, 14))
-
-        log_hdr = tk.Frame(log_card, bg=BG_CARD)
-        log_hdr.pack(fill="x", pady=(0, 4))
-        tk.Label(
-            log_hdr,
-            text="CRONOLOGIA EVENTI E ANOMALIE (SALVATA IN DOTTOR_MODEM_LOG.CSV)",
-            bg=BG_CARD,
-            fg=FG_MUTED,
-            font=("Segoe UI", 8, "bold"),
-        ).pack(side="left")
-
-        btn_csv = self._make_button(
-            log_hdr,
-            "📂 Apri Storico Excel (CSV)",
-            self._action_open_csv,
-            "Salva e apre il file CSV con tutte le misurazioni registrate.",
-            bg=BG_ELEV,
-            fg=FG_SUB,
-        )
-        btn_csv.configure(padx=8, pady=1, font=("Segoe UI", 8, "bold"))
-        btn_csv.pack(side="right")
-
-        self.txt_log = tk.Text(
-            log_card,
-            height=4,
-            bg="#070d19",
-            fg=FG_TEXT,
-            font=("Consolas", 9),
-            relief="flat",
-            state="disabled",
-            wrap="none",
-        )
-        self.txt_log.pack(fill="x")
-        self.txt_log.tag_configure("ERR", foreground=COL_ERR)
-        self.txt_log.tag_configure("WARN", foreground=COL_WARN)
-        self.txt_log.tag_configure("OK", foreground=COL_OK)
-        self.txt_log.tag_configure("INFO", foreground=COL_ACCENT)
-
-    def _create_kpi_card(
-        self, parent: tk.Frame, col: int, title: str, val: str, sub: str, total_cols: int, tooltip: str
+    def _create_big_metric(
+        self, parent: tk.Frame, col: int, label: str, val: str, sub: str, tooltip: str
     ) -> tuple[tk.Label, tk.Label]:
-        pad_l = 0 if col == 0 else 5
-        pad_r = 0 if col == total_cols - 1 else 5
-        card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER, highlightthickness=1, padx=12, pady=8)
+        pad_l = 0 if col == 0 else 8
+        pad_r = 0 if col == 2 else 8
+        card = tk.Frame(parent, bg=BG_CARD, padx=20, pady=16)
         card.grid(row=0, column=col, sticky="nsew", padx=(pad_l, pad_r))
 
-        lbl_t = tk.Label(card, text=title, bg=BG_CARD, fg=FG_MUTED, font=("Segoe UI", 8, "bold"))
-        lbl_t.pack(anchor="w")
-        lbl_val = tk.Label(card, text=val, bg=BG_CARD, fg=FG_TEXT, font=("Segoe UI", 16, "bold"))
-        lbl_val.pack(anchor="w", pady=(2, 1))
-        lbl_sub = tk.Label(card, text=sub, bg=BG_CARD, fg=FG_MUTED, font=("Segoe UI", 8))
+        lbl_top = tk.Label(card, text=label, bg=BG_CARD, fg=FG_MUTED, font=("Segoe UI", 8, "bold"))
+        lbl_top.pack(anchor="w")
+
+        lbl_val = tk.Label(card, text=val, bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 22, "bold"))
+        lbl_val.pack(anchor="w", pady=(6, 4))
+
+        lbl_sub = tk.Label(card, text=sub, bg=BG_CARD, fg=FG_SECONDARY, font=("Segoe UI", 9))
         lbl_sub.pack(anchor="w")
 
-        for w in (card, lbl_t, lbl_val, lbl_sub):
+        for w in (card, lbl_top, lbl_val, lbl_sub):
             ToolTip(w, tooltip)
         return lbl_val, lbl_sub
 
-    def _create_check_row(self, parent: tk.Frame, title: str, subtitle: str) -> tuple[tk.Label, tk.Label]:
-        row = tk.Frame(parent, bg=BG_ELEV, padx=10, pady=8)
-        row.pack(fill="x", pady=(0, 7))
+    # ------------------------------------------
+    # PAGINA 2: RIPARA & DNS (GUIDATA)
+    # ------------------------------------------
+    def _build_page_tools(self) -> None:
+        # 1. Percorso Connessione a 4 Tappe
+        path_card = tk.Frame(self.page_tools, bg=BG_CARD, padx=20, pady=16)
+        path_card.pack(fill="x", pady=(0, 16))
 
-        left = tk.Frame(row, bg=BG_ELEV)
-        left.pack(side="left", fill="x", expand=True)
-        tk.Label(left, text=title, bg=BG_ELEV, fg=FG_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        lbl_sub = tk.Label(left, text=subtitle, bg=BG_ELEV, fg=FG_MUTED, font=("Segoe UI", 8))
-        lbl_sub.pack(anchor="w")
+        tk.Label(
+            path_card,
+            text="DOVE PASSA LA TUA CONNESSIONE (CONTROLLO IN TEMPO REALE)",
+            bg=BG_CARD,
+            fg=FG_MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 12))
 
-        lbl_state = tk.Label(row, text="⏳ Verifica", bg=BG_ELEV, fg=COL_ACCENT, font=("Segoe UI", 9, "bold"))
-        lbl_state.pack(side="right")
-        return lbl_state, lbl_sub
+        steps_row = tk.Frame(path_card, bg=BG_CARD)
+        steps_row.pack(fill="x")
+        for i in range(4):
+            steps_row.columnconfigure(i, weight=1, uniform="path_steps")
 
-    def _update_dns_ui_state(self) -> None:
-        self.lbl_dns_pill.configure(text=self.dns_label)
-        self.lbl_subhdr.configure(
-            text=f"Connessione: {self.iface_name}   •   Modem: {self.router_ip}   •   DNS: {self.dns_label}"
+        self.node_nic = self._create_path_node(steps_row, 0, "💻  Scheda PC", self.iface_name)
+        self.node_modem = self._create_path_node(steps_row, 1, "📡  Modem Casa", self.router_ip)
+        self.node_wan = self._create_path_node(steps_row, 2, "🌍  Linea Internet", "Server esterni")
+        self.node_dns = self._create_path_node(steps_row, 3, "🔎  Apertura Siti", self.dns_label)
+
+        # 2. Azioni Guidate (2 colonne)
+        cols = tk.Frame(self.page_tools, bg=BG_APP)
+        cols.pack(fill="both", expand=True, pady=(0, 18))
+        cols.columnconfigure(0, weight=1, uniform="tool_cols")
+        cols.columnconfigure(1, weight=1, uniform="tool_cols")
+
+        # Colonna Sinistra: DNS & Ripristino
+        left_col = tk.Frame(cols, bg=BG_CARD, padx=20, pady=16)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        tk.Label(left_col, text="Velocizza l'apertura dei siti (DNS)", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        tk.Label(
+            left_col,
+            text="Se Internet risulta connesso ma le pagine web impiegano troppo ad aprirsi, cambia i server DNS con uno di questi:",
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 9),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 12))
+
+        dns_btn_row = tk.Frame(left_col, bg=BG_CARD)
+        dns_btn_row.pack(fill="x", pady=(0, 10))
+
+        self.btn_set_cf = self._make_btn(
+            dns_btn_row, "Cloudflare (1.1.1.1)", lambda: self._action_set_dns("cloudflare"), padx=12, pady=7
         )
-        self.chk_dns[1].configure(text=f"Attivo: {self.dns_label}")
+        self.btn_set_cf.pack(side="left", padx=(0, 6))
 
-        if self.dns_kind == "cloudflare":
-            self.btn_dns_cycle.configure(text="🌐 Passa a Google (8.8.8.8)")
-        elif self.dns_kind == "google":
-            self.btn_dns_cycle.configure(text="🌐 Torna a Automatico (DHCP)")
+        self.btn_set_gg = self._make_btn(
+            dns_btn_row, "Google (8.8.8.8)", lambda: self._action_set_dns("google"), padx=12, pady=7
+        )
+        self.btn_set_gg.pack(side="left", padx=(0, 6))
+
+        self.btn_set_auto = self._make_btn(
+            dns_btn_row, "Automatico", lambda: self._action_set_dns("dhcp"), padx=12, pady=7
+        )
+        self.btn_set_auto.pack(side="left")
+
+        if not self.is_admin:
+            self._make_btn(
+                left_col,
+                "⚡ Sblocca permessi Amministratore per cambiare DNS",
+                self._action_elevate_admin,
+                bg=STATUS_WARN_BG,
+                fg="#fde68a",
+                hover_bg="#92400e",
+                padx=12,
+                pady=6,
+                font_size=8,
+            ).pack(anchor="w", pady=(0, 12))
+
+        tk.Frame(left_col, bg=BORDER, height=1).pack(fill="x", pady=10)
+
+        tk.Label(left_col, text="Ripristino Connessione PC", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        tk.Label(
+            left_col,
+            text="Pulisce la memoria dei siti o riavvia la scheda di rete del computer se la connessione si è bloccata.",
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 9),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        reset_row = tk.Frame(left_col, bg=BG_CARD)
+        reset_row.pack(fill="x")
+        self._make_btn(reset_row, "🧹 Pulisci Memoria Siti", self._action_flush_dns, padx=12, pady=7).pack(side="left", padx=(0, 8))
+        self._make_btn(
+            reset_row, "🔄 Riavvia Scheda Rete", self._action_full_reset, fg="#fca5a5", padx=12, pady=7
+        ).pack(side="left")
+
+        # Colonna Destra: Controllo Percorso Nodi (Tracert)
+        right_col = tk.Frame(cols, bg=BG_CARD, padx=20, pady=16)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        hdr_r = tk.Frame(right_col, bg=BG_CARD)
+        hdr_r.pack(fill="x")
+        tk.Label(hdr_r, text="Dove rallenta la linea?", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 11, "bold")).pack(side="left")
+
+        self.btn_run_trace = self._make_btn(
+            hdr_r,
+            "🧭 Avvia Verifica",
+            self._action_run_tracert,
+            bg=ACCENT_BLUE,
+            fg="#ffffff",
+            hover_bg=ACCENT_BLUE_HOVER,
+            padx=12,
+            pady=5,
+            font_size=8,
+        )
+        self.btn_run_trace.pack(side="right")
+
+        tk.Label(
+            right_col,
+            text="Controlla il ritardo di ogni passaggio tra il tuo modem, la centrale dell'operatore e Internet.",
+            bg=BG_CARD,
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 9),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        self.tree_trace = ttk.Treeview(
+            right_col,
+            columns=("hop", "zone", "ms", "ip"),
+            show="headings",
+            style="Clean.Treeview",
+            height=6,
+        )
+        self.tree_trace.heading("hop", text="#")
+        self.tree_trace.heading("zone", text="Passaggio")
+        self.tree_trace.heading("ms", text="Ritardo")
+        self.tree_trace.heading("ip", text="Indirizzo")
+        self.tree_trace.column("hop", anchor="center", width=35)
+        self.tree_trace.column("zone", anchor="w", width=155)
+        self.tree_trace.column("ms", anchor="center", width=70)
+        self.tree_trace.column("ip", anchor="w", width=115)
+        self.tree_trace.pack(fill="both", expand=True)
+        self.tree_trace.insert("", "end", values=("-", "Premi 'Avvia Verifica'", "-", "-"))
+
+    def _create_path_node(self, parent: tk.Frame, col: int, title: str, sub: str) -> tuple[tk.Label, tk.Label]:
+        pad_l = 0 if col == 0 else 6
+        pad_r = 0 if col == 3 else 6
+        box = tk.Frame(parent, bg=BG_CARD_ALT, padx=14, pady=12)
+        box.grid(row=0, column=col, sticky="nsew", padx=(pad_l, pad_r))
+
+        tk.Label(box, text=title, bg=BG_CARD_ALT, fg=FG_PRIMARY, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        lbl_sub = tk.Label(box, text=sub, bg=BG_CARD_ALT, fg=FG_MUTED, font=("Segoe UI", 8))
+        lbl_sub.pack(anchor="w", pady=(2, 6))
+        lbl_badge = tk.Label(box, text="⏳ Verifica...", bg=BG_CARD_ALT, fg=ACCENT_CYAN, font=("Segoe UI", 9, "bold"))
+        lbl_badge.pack(anchor="w")
+        return lbl_badge, lbl_sub
+
+    # ------------------------------------------
+    # PAGINA 3: DETTAGLI (PROGRAMMI & STORICO)
+    # ------------------------------------------
+    def _build_page_details(self) -> None:
+        top_split = tk.Frame(self.page_details, bg=BG_APP)
+        top_split.pack(fill="both", expand=True, pady=(0, 18))
+        top_split.columnconfigure(0, weight=1, uniform="det_cols")
+        top_split.columnconfigure(1, weight=1, uniform="det_cols")
+
+        # Sinistra: Programmi attivi
+        procs_card = tk.Frame(top_split, bg=BG_CARD, padx=18, pady=14)
+        procs_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        p_hdr = tk.Frame(procs_card, bg=BG_CARD)
+        p_hdr.pack(fill="x", pady=(0, 8))
+        tk.Label(p_hdr, text="Programmi connessi a Internet", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 10, "bold")).pack(side="left")
+
+        self.btn_target = self._make_btn(
+            p_hdr,
+            "Server Ping: 1.1.1.1 ↻",
+            self._action_cycle_target,
+            bg=BG_CARD_ALT,
+            fg=FG_SECONDARY,
+            padx=8,
+            pady=3,
+            font_size=8,
+        )
+        self.btn_target.pack(side="right")
+
+        self.tree_procs = ttk.Treeview(
+            procs_card,
+            columns=("proc", "kind", "tot"),
+            show="headings",
+            style="Clean.Treeview",
+        )
+        self.tree_procs.heading("proc", text="Applicazione")
+        self.tree_procs.heading("kind", text="Attività")
+        self.tree_procs.heading("tot", text="Connessioni")
+        self.tree_procs.column("proc", anchor="w", width=165)
+        self.tree_procs.column("kind", anchor="w", width=155)
+        self.tree_procs.column("tot", anchor="center", width=80)
+        self.tree_procs.pack(fill="both", expand=True)
+
+        # Destra: Cronologia Eventi & Excel
+        log_card = tk.Frame(top_split, bg=BG_CARD, padx=18, pady=14)
+        log_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        l_hdr = tk.Frame(log_card, bg=BG_CARD)
+        l_hdr.pack(fill="x", pady=(0, 8))
+        tk.Label(l_hdr, text="Registro Eventi", bg=BG_CARD, fg=FG_PRIMARY, font=("Segoe UI", 10, "bold")).pack(side="left")
+
+        self.btn_pause = self._make_btn(
+            l_hdr, "⏸ Pausa", self._action_toggle_pause, bg=BG_CARD_ALT, fg=FG_SECONDARY, padx=8, pady=3, font_size=8
+        )
+        self.btn_pause.pack(side="right", padx=(6, 0))
+
+        self._make_btn(
+            l_hdr, "📂 Apri Excel (CSV)", self._action_open_csv, bg=BG_CARD_ALT, fg=FG_SECONDARY, padx=8, pady=3, font_size=8
+        ).pack(side="right")
+
+        self.txt_log = tk.Text(
+            log_card,
+            bg="#131c2e",
+            fg=FG_SECONDARY,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=10,
+            pady=8,
+            state="disabled",
+            wrap="word",
+        )
+        self.txt_log.pack(fill="both", expand=True)
+        self.txt_log.tag_configure("ERR", foreground=STATUS_ERR)
+        self.txt_log.tag_configure("WARN", foreground=STATUS_WARN)
+        self.txt_log.tag_configure("OK", foreground=STATUS_OK)
+        self.txt_log.tag_configure("INFO", foreground=ACCENT_CYAN)
+
+    # ------------------------------------------
+    # NAVIGAZIONE & STATI UI
+    # ------------------------------------------
+    def _switch_page(self, page_id: str) -> None:
+        self.active_page = page_id
+        for pid, btn in self.nav_buttons.items():
+            if pid == page_id:
+                btn.configure(bg=ACCENT_BLUE, fg="#ffffff")
+            else:
+                btn.configure(bg=BG_CARD, fg=FG_MUTED)
+
+        self.page_home.pack_forget()
+        self.page_tools.pack_forget()
+        self.page_details.pack_forget()
+
+        if page_id == "home":
+            self.page_home.pack(fill="both", expand=True)
+            self.root.after(50, self._draw_area_chart)
+        elif page_id == "tools":
+            self.page_tools.pack(fill="both", expand=True)
         else:
-            self.btn_dns_cycle.configure(text="🌐 Passa a Cloudflare (1.1.1.1)")
+            self.page_details.pack(fill="both", expand=True)
+            threading.Thread(target=self._refresh_processes_now, daemon=True).start()
+
+    def _update_dns_labels(self) -> None:
+        short_name = "Cloudflare" if self.dns_kind == "cloudflare" else ("Google" if self.dns_kind == "google" else "Automatico")
+        self.btn_quick_dns.configure(text=f"🌐  DNS: {short_name} ↻")
+        self.node_dns[1].configure(text=self.dns_label)
+
+        for btn, kind in (
+            (self.btn_set_cf, "cloudflare"),
+            (self.btn_set_gg, "google"),
+            (self.btn_set_auto, "dhcp"),
+        ):
+            if self.dns_kind == kind:
+                btn._base_bg = STATUS_OK_BG  # type: ignore[attr-defined]
+                btn.configure(bg=STATUS_OK_BG, fg="#6ee7b7")
+            else:
+                btn._base_bg = BG_CARD_ALT  # type: ignore[attr-defined]
+                btn.configure(bg=BG_CARD_ALT, fg=FG_PRIMARY)
 
     def log_message(self, level: str, message: str) -> None:
         now_short = datetime.now().strftime("%H:%M:%S")
-        line = f"[{now_short}] [{level:<17}] {message}"
+        line = f"{now_short}  •  {message}"
         with self.lock:
             self.pending_logs.append((level, line))
 
-    # --- MODALITÀ COMPATTA & PRIMO PIANO ---
+    # ------------------------------------------
+    # AZIONI UTENTE
+    # ------------------------------------------
     def _action_toggle_compact(self) -> None:
         self.compact_mode = not self.compact_mode
         if self.compact_mode:
-            self.full_body.pack_forget()
-            self.compact_bar.pack(fill="x", padx=18, pady=(0, 14))
+            self.nav_frame.pack_forget()
+            self.pages_container.pack_forget()
+            self.compact_view.pack(fill="x", padx=24, pady=(0, 16))
             self.btn_compact.configure(text="🗖 Espandi")
-            self.root.minsize(560, 195)
-            self.root.geometry("700x205")
+            self.root.minsize(480, 145)
+            self.root.geometry("560x155")
         else:
-            self.compact_bar.pack_forget()
-            self.full_body.pack(fill="both", expand=True)
-            self.btn_compact.configure(text="🗗 Compatta")
-            self.root.minsize(1020, 700)
-            self.root.geometry("1240x800")
+            self.compact_view.pack_forget()
+            self.nav_frame.pack(side="left", padx=(36, 0))
+            self.pages_container.pack(fill="both", expand=True)
+            self.btn_compact.configure(text="🗗 Mini")
+            self.root.minsize(880, 600)
+            self.root.geometry("980x660")
+            self._switch_page(self.active_page)
 
     def _action_toggle_topmost(self) -> None:
         self.always_on_top = not self.always_on_top
         self.root.attributes("-topmost", self.always_on_top)
         if self.always_on_top:
-            self.btn_pin._default_bg = "#065f46"  # type: ignore[attr-defined]
-            self.btn_pin.configure(bg="#065f46", fg="#6ee7b7", text="📌 Fissato")
+            self.btn_pin._base_bg = STATUS_OK_BG  # type: ignore[attr-defined]
+            self.btn_pin.configure(bg=STATUS_OK_BG, fg="#6ee7b7", text="📌 Fissato")
         else:
-            self.btn_pin._default_bg = BG_ELEV  # type: ignore[attr-defined]
-            self.btn_pin.configure(bg=BG_ELEV, fg=FG_SUB, text="📌 Primo Piano")
-
-    def _on_tab_changed(self, _event=None) -> None:
-        if self.notebook.index("current") == 1:
-            threading.Thread(target=self._refresh_processes_now, daemon=True).start()
+            self.btn_pin._base_bg = BG_CARD_ALT  # type: ignore[attr-defined]
+            self.btn_pin.configure(bg=BG_CARD_ALT, fg=FG_SECONDARY, text="📌 Fissa sopra")
 
     def _refresh_processes_now(self) -> None:
-        procs = get_network_processes(limit=12)
+        procs = get_network_processes(limit=15)
         with self.lock:
             self.suspects = procs
 
-    # --- SPEEDTEST 5 SECONDI ---
     def _action_run_speedtest(self) -> None:
         if self.speedtest_running:
             return
         self.speedtest_running = True
         self.speedtest_live_mbps = 0.0
-        self.btn_speedtest.configure(state="disabled", text="⏳ Test 5.0s...")
+        self.btn_speedtest.configure(state="disabled", text="⏳  Misurazione (5.0s)...")
         threading.Thread(target=self._run_speedtest_worker, daemon=True).start()
 
     def _run_speedtest_worker(self) -> None:
         with self.lock:
             idle_ping = self.latest_snapshot["baseline_ms"] or self.latest_snapshot["inet_ms"]
 
-        self.log_message("SPEEDTEST", "Avvio test di velocità massima (scaricamento per 5 secondi)...")
+        self.log_message("INFO", "Avvio test di velocità massima (5 secondi)...")
 
         def on_progress(rem: float, mbps_now: float) -> None:
             with self.lock:
@@ -752,10 +905,11 @@ class DottorModemApp:
                 self.speedtest_banner_until = time.time() + 2.0
                 self.speedtest_banner_data = (
                     "warn",
-                    f"🚀 Test velocità in corso ({rem:.1f}s rimanenti) — Velocità rilevata: {mbps_now:.1f} Mbps",
-                    "Sto saturando la linea per misurare la banda reale e la tenuta del router sotto sforzo...",
+                    "🚀",
+                    f"Test velocità in corso: {mbps_now:.1f} Mbps",
+                    f"Tempo rimanente: {rem:.1f} secondi — Sto misurando la velocità massima della tua linea...",
                 )
-            self.root.after(0, lambda r=rem: self.btn_speedtest.configure(text=f"⏳ Test ({r:.1f}s)..."))
+            self.root.after(0, lambda r=rem: self.btn_speedtest.configure(text=f"⏳  Test ({r:.1f}s)..."))
 
         def get_cur_ping() -> float | None:
             with self.lock:
@@ -768,50 +922,43 @@ class DottorModemApp:
         if success and total_bytes > 0:
             final_mbps = (total_bytes * 8.0) / (elapsed * 1_000_000.0)
             final_mbs = total_bytes / (elapsed * 1_048_576.0)
-            downloaded_mb = total_bytes / 1_048_576.0
 
-            bloat_txt = ""
             sev = "ok"
+            bloat_note = "La linea resta reattiva anche alla massima velocità."
             if idle_ping is not None and loaded_pings:
                 avg_loaded = sum(loaded_pings) / len(loaded_pings)
                 delta = avg_loaded - idle_ping
                 if delta > 80.0:
                     sev = "warn"
-                    bloat_txt = f" | Ping: {idle_ping:.0f} ms → {avg_loaded:.0f} ms (+{delta:.0f} ms Bufferbloat alto)"
-                elif delta > 30.0:
-                    bloat_txt = f" | Ping: {idle_ping:.0f} ms → {avg_loaded:.0f} ms (+{delta:.0f} ms Bufferbloat lieve)"
+                    bloat_note = f"Sotto sforzo massimo il ping sale da {idle_ping:.0f} ms a {avg_loaded:.0f} ms (Bufferbloat)."
                 else:
-                    bloat_txt = f" | Ping stabile: {idle_ping:.0f} ms → {avg_loaded:.0f} ms"
+                    bloat_note = f"Ping a riposo: {idle_ping:.0f} ms • Sotto carico: {avg_loaded:.0f} ms."
 
-            title = f"🏁 Velocità Massima Misurata: {final_mbps:.1f} Mbps ({final_mbs:.1f} MB/s){bloat_txt}"
-            advice = (
-                f"Scaricati {downloaded_mb:.1f} MB in {elapsed:.1f}s. "
-                + (
-                    "Sotto sforzo massimo il ping sale molto: limita i download all'85% se giochi online."
-                    if sev == "warn"
-                    else "Ottima tenuta della linea anche alla massima velocità."
-                )
-            )
             with self.lock:
                 self.speedtest_last_mbps = final_mbps
-                self.speedtest_banner_data = (sev, title, advice)
+                self.speedtest_banner_data = (
+                    sev,
+                    "🏁",
+                    f"Velocità Massima: {final_mbps:.1f} Mbps ({final_mbs:.1f} MB/s)",
+                    bloat_note,
+                )
                 self.speedtest_banner_until = time.time() + 14.0
 
-            self.log_message("SPEEDTEST", f"Risultato: {final_mbps:.1f} Mbps ({final_mbs:.1f} MB/s){bloat_txt}")
+            self.log_message("OK", f"Speedtest completato: {final_mbps:.1f} Mbps ({final_mbs:.1f} MB/s)")
         else:
             with self.lock:
                 self.speedtest_banner_data = (
                     "err",
-                    "❌ Impossibile completare il test di velocità",
+                    "❌",
+                    "Test di velocità non riuscito",
                     "Verifica che la connessione Internet sia attiva e riprova.",
                 )
                 self.speedtest_banner_until = time.time() + 8.0
-            self.log_message("ERRORE", "Test di velocità fallito: server di prova non raggiungibile.")
+            self.log_message("ERR", "Test di velocità fallito.")
 
         self.speedtest_running = False
-        self.root.after(0, lambda: self.btn_speedtest.configure(state="normal", text="🚀 Speedtest (5s)"))
+        self.root.after(0, lambda: self.btn_speedtest.configure(state="normal", text="🚀  Misura Velocità (5s)"))
 
-    # --- ALTRE AZIONI UTENTE ---
     def _action_elevate_admin(self) -> None:
         entry_script = os.path.abspath(sys.argv[0])
         ret = ctypes.windll.shell32.ShellExecuteW(
@@ -821,50 +968,47 @@ class DottorModemApp:
             self._on_close()
 
     def _action_cycle_dns(self) -> None:
-        if self.dns_kind == "cloudflare":
-            next_mode = "google"
-        elif self.dns_kind == "google":
-            next_mode = "dhcp"
-        else:
-            next_mode = "cloudflare"
+        next_mode = "google" if self.dns_kind == "cloudflare" else ("dhcp" if self.dns_kind == "google" else "cloudflare")
+        self._action_set_dns(next_mode)
 
+    def _action_set_dns(self, mode: str) -> None:
         if not self.is_admin:
             if messagebox.askyesno(
-                "Permessi Amministratore Richiesti",
-                "Per cambiare i server DNS di Windows servono i permessi di Amministratore.\n\nVuoi riavviare subito Dottor Modem come Amministratore?",
+                "Permessi Amministratore",
+                "Per cambiare i DNS di Windows servono i permessi di Amministratore.\n\nVuoi riavviare Dottor Modem come Amministratore?",
             ):
                 self._action_elevate_admin()
             return
-        threading.Thread(target=self._run_set_dns, args=(next_mode,), daemon=True).start()
+        threading.Thread(target=self._run_set_dns, args=(mode,), daemon=True).start()
 
     def _run_set_dns(self, mode: str) -> None:
         ok, msg = set_dns_servers(self.iface_name, mode)
         if ok:
             self.dns_servers = get_current_dns_servers(self.iface_name)
             self.dns_label, self.dns_kind = describe_dns_provider(self.dns_servers)
-            self.log_message("FIX DNS", f"{msg} + Cache DNS pulita.")
-            self.root.after(0, self._update_dns_ui_state)
+            self.log_message("OK", f"{msg} + Cache pulita.")
+            self.root.after(0, self._update_dns_labels)
         else:
-            self.log_message("ERRORE", f"Impossibile modificare i DNS su '{self.iface_name}'.")
+            self.log_message("ERR", "Impossibile cambiare i server DNS.")
 
     def _action_flush_dns(self) -> None:
         threading.Thread(target=self._run_flush_dns, daemon=True).start()
 
     def _run_flush_dns(self) -> None:
         flush_dns_cache()
-        self.log_message("FIX DNS", "Memoria DNS pulita con successo.")
+        self.log_message("OK", "Memoria DNS pulita con successo.")
 
     def _action_full_reset(self) -> None:
         if not messagebox.askyesno(
-            "Conferma Riavvio Scheda di Rete",
-            "Questa operazione disconnetterà il PC per circa 5 secondi per rinnovare l'indirizzo IP e pulire la rete.\n\nVuoi procedere?",
+            "Riavvia Scheda di Rete",
+            "La connessione verrà sospesa per circa 5 secondi per rinnovare l'indirizzo IP.\n\nVuoi continuare?",
         ):
             return
         threading.Thread(target=self._run_full_reset, daemon=True).start()
 
     def _run_full_reset(self) -> None:
         self.last_reset_ts = time.time()
-        self.log_message("FIX RETE", "Riavvio scheda di rete (rinnovo IP e DNS)...")
+        self.log_message("WARN", "Riavvio scheda di rete in corso...")
         reset_network_stack()
         with self.lock:
             self.win_outcomes.clear()
@@ -875,39 +1019,38 @@ class DottorModemApp:
         idx = (keys.index(self.current_target_label) + 1) % len(keys)
         self.current_target_label = keys[idx]
         self.current_target_ip = TARGETS[self.current_target_label]
-        self.btn_target.configure(text=f"Server Test: {self.current_target_ip} ↻")
-        self.log_message("INFO", f"Server di test cambiato in {self.current_target_label}")
+        self.btn_target.configure(text=f"Server Ping: {self.current_target_ip} ↻")
+        self.log_message("INFO", f"Server di controllo impostato su {self.current_target_label}")
 
     def _action_run_tracert(self) -> None:
-        self.notebook.select(2)
+        self.btn_run_trace.configure(state="disabled", text="⏳ Verifica...")
         for item in self.tree_trace.get_children():
             self.tree_trace.delete(item)
-        self.tree_trace.insert("", "end", values=("...", "Analisi nodi in corso...", "", ""))
+        self.tree_trace.insert("", "end", values=("...", "Controllo passaggi in corso...", "", ""))
         threading.Thread(target=self._run_tracert_worker, daemon=True).start()
 
     def _run_tracert_worker(self) -> None:
         target = self.current_target_ip
-        self.log_message("INFO", f"Controllo percorso nodi verso {target}...")
         rows = run_traceroute(target, max_hops=8)
 
         def update_tree() -> None:
+            self.btn_run_trace.configure(state="normal", text="🧭 Avvia Verifica")
             for item in self.tree_trace.get_children():
                 self.tree_trace.delete(item)
             if not rows:
-                self.tree_trace.insert("", "end", values=("-", "Nessun dato rilevato", "-", "-"))
+                self.tree_trace.insert("", "end", values=("-", "Nessuna risposta", "-", "-"))
             else:
                 for r in rows:
                     self.tree_trace.insert("", "end", values=r)
 
         self.root.after(0, update_tree)
-        self.log_message("OK", f"Analisi percorso completata ({len(rows)} nodi controllati).")
+        self.log_message("OK", f"Verifica percorso completata ({len(rows)} passaggi).")
 
     def _action_toggle_pause(self) -> None:
         with self.lock:
             self.paused = not self.paused
             paused = self.paused
         self.btn_pause.configure(text="▶ Riprendi" if paused else "⏸ Pausa")
-        self.log_message("INFO", "Monitoraggio in pausa." if paused else "Monitoraggio ripreso.")
 
     def _action_open_csv(self) -> None:
         self.csv_logger.flush()
@@ -915,9 +1058,11 @@ class DottorModemApp:
         if os.path.exists(path):
             os.startfile(path)
         else:
-            messagebox.showinfo("Storico CSV", "Nessun dato registrato ancora.")
+            messagebox.showinfo("File Excel", "Nessun dato registrato ancora.")
 
-    # --- WORKER 1HZ ---
+    # ------------------------------------------
+    # WORKER DI MONITORAGGIO (1 HZ)
+    # ------------------------------------------
     def _monitor_worker(self) -> None:
         tick = 0
         fail_streak = 0
@@ -950,7 +1095,8 @@ class DottorModemApp:
                 d_tx = (curr_tx - prev_tx) & 0xFFFFFFFF
                 down_mbs = (d_rx / (1024 * 1024)) / dt if d_rx < 500_000_000 else 0.0
                 up_mbs = (d_tx / (1024 * 1024)) / dt if d_tx < 500_000_000 else 0.0
-                self.total_rx_mb += down_mbs * dt
+                down_mbps = (down_mbs * 1_048_576 * 8) / 1_000_000.0
+                up_mbps = (up_mbs * 1_048_576 * 8) / 1_000_000.0
                 prev_rx, prev_tx, prev_time = curr_rx, curr_tx, now_perf
 
                 if tick % 3 == 0 and i_ms is not None:
@@ -960,9 +1106,7 @@ class DottorModemApp:
                         dns_ms = self.latest_snapshot["dns_ms"]
 
                 with self.lock:
-                    self.hist_router.append(r_ms)
                     self.hist_internet.append(i_ms)
-                    self.hist_down_mbps.append(round(down_mbs, 2))
                     self.win_outcomes.append(i_ms is not None)
 
                     if i_ms is not None:
@@ -973,17 +1117,15 @@ class DottorModemApp:
                     else:
                         jitter = self.win_jitters[-1] if self.win_jitters else 0.0
 
-                    self.hist_jitter.append(round(jitter, 1) if i_ms is not None else None)
                     loss_pct = (self.win_outcomes.count(False) / len(self.win_outcomes)) * 100.0
                     self.baseline.update(i_ms, down_mbs, loss_pct)
                     base_ms = self.baseline.baseline_ms
                     warn_ms = self.baseline.dynamic_warn_ms
                     grade = compute_line_grade(self.win_inet, self.win_jitters, self.win_outcomes)
 
-                is_stressed = (i_ms is None) or (loss_pct > 0) or (i_ms > warn_ms) or (down_mbs >= 2.0)
-                scan_interval = 3 if is_stressed else 10
-                if tick % scan_interval == 0:
-                    procs = get_network_processes(limit=12)
+                is_stressed = (i_ms is None) or (loss_pct > 0) or (i_ms > warn_ms) or (down_mbps >= 15.0)
+                if tick % (3 if is_stressed else 12) == 0:
+                    procs = get_network_processes(limit=15)
                     with self.lock:
                         self.suspects = procs
                 else:
@@ -994,37 +1136,34 @@ class DottorModemApp:
                 top_app = active_apps[0] if active_apps else ""
                 procs_str = ", ".join(active_apps[:3])
 
-                diag_sev, diag_title, diag_advice = build_human_diagnosis(
-                    r_ms, i_ms, jitter, loss_pct, dns_ms, down_mbs, top_app, warn_threshold_ms=warn_ms
+                sev, icon, title, subtitle = build_friendly_status(
+                    r_ms, i_ms, jitter, loss_pct, dns_ms, down_mbps, top_app, warn_ms
                 )
 
                 if r_ms is None:
                     fail_streak += 1
                     level = "ERRORE MODEM"
-                    self.log_message(level, f"Modem {self.router_ip} non raggiungibile ({fail_streak}/{MAX_CONSECUTIVE_FAILS})")
+                    self.log_message("ERR", f"Modem {self.router_ip} non raggiungibile ({fail_streak}/{MAX_CONSECUTIVE_FAILS})")
                 elif i_ms is None:
                     fail_streak += 1
-                    level = "INTERNET ASSENTE"
-                    self.log_message(level, f"Modem OK ({r_ms:.0f} ms), linea esterna assente ({fail_streak}/{MAX_CONSECUTIVE_FAILS})")
+                    level = "OFFLINE"
+                    self.log_message("ERR", f"Linea Internet assente ({fail_streak}/{MAX_CONSECUTIVE_FAILS})")
                 elif dns_ms is None:
                     level = "ERRORE DNS"
-                    self.log_message(level, "Server DNS non rispondono: pulizia cache in corso...")
+                    self.log_message("WARN", "DNS bloccati: pulizia automatica cache...")
                     self._run_flush_dns()
                 else:
                     fail_streak = 0
                     if loss_pct > 0:
-                        level = "PERDITA DATI"
-                        if tick % 3 == 0:
-                            self.log_message(level, f"Loss {loss_pct:.0f}% — Ping: {i_ms:.0f} ms | Download: {down_mbs:.1f} MB/s")
-                    elif r_ms > warn_ms or i_ms > warn_ms or jitter > JITTER_WARN_MS:
-                        level = "RALLENTAMENTO"
-                        if tick % 4 == 0 and not self.speedtest_running:
-                            self.log_message(
-                                level,
-                                f"Ping: {i_ms:.0f} ms | Jitter: {jitter:.1f} ms | Download: {down_mbs:.1f} MB/s",
-                            )
+                        level = "INSTABILE"
+                        if tick % 4 == 0:
+                            self.log_message("ERR", f"Perdita dati rilevata: {loss_pct:.0f}%")
+                    elif i_ms > warn_ms or jitter > JITTER_WARN_MS:
+                        level = "LENTA"
+                        if tick % 5 == 0 and not self.speedtest_running:
+                            self.log_message("WARN", f"Rallentamento: Ping {i_ms:.0f} ms (Download {down_mbps:.1f} Mbps)")
                     else:
-                        level = "OTTIMO"
+                        level = "ONLINE"
 
                 if fail_streak >= MAX_CONSECUTIVE_FAILS and (time.time() - self.last_reset_ts > RESET_COOLDOWN_SEC):
                     self._run_full_reset()
@@ -1045,9 +1184,10 @@ class DottorModemApp:
                 with self.lock:
                     self.latest_snapshot = {
                         "level": level,
-                        "diag_sev": diag_sev,
-                        "diag_title": diag_title,
-                        "diag_advice": diag_advice,
+                        "sev": sev,
+                        "icon": icon,
+                        "title": title,
+                        "subtitle": subtitle,
                         "inet_ms": i_ms,
                         "router_ms": r_ms,
                         "jitter_ms": jitter,
@@ -1055,7 +1195,8 @@ class DottorModemApp:
                         "dns_ms": dns_ms,
                         "grade": grade,
                         "down_mbs": down_mbs,
-                        "up_mbs": up_mbs,
+                        "down_mbps": down_mbps,
+                        "up_mbps": up_mbps,
                         "hw_errors": hw_errs,
                         "baseline_ms": base_ms,
                         "warn_ms": warn_ms,
@@ -1065,7 +1206,9 @@ class DottorModemApp:
                 elapsed = time.perf_counter() - t_start
                 time.sleep(max(0.05, POLL_INTERVAL_SEC - elapsed))
 
-    # --- AGGIORNAMENTO UI ---
+    # ------------------------------------------
+    # AGGIORNAMENTO GRAFICO & UI
+    # ------------------------------------------
     def _refresh_ui(self) -> None:
         if not self.running:
             return
@@ -1075,8 +1218,6 @@ class DottorModemApp:
             procs = list(self.suspects)
             logs_to_flush = list(self.pending_logs)
             self.pending_logs.clear()
-            min_lat = min(self.all_valid_inet) if self.all_valid_inet else None
-            max_lat = max(self.all_valid_inet) if self.all_valid_inet else None
             paused = self.paused
             st_running = self.speedtest_running
             st_live = self.speedtest_live_mbps
@@ -1084,226 +1225,183 @@ class DottorModemApp:
             st_until = self.speedtest_banner_until
             st_banner = self.speedtest_banner_data
 
-        level = "SPEEDTEST" if st_running else ("IN PAUSA" if paused else snap["level"])
-        if level == "OTTIMO":
-            b_bg, b_fg = "#064e3b", COL_OK
-        elif level == "SPEEDTEST":
-            b_bg, b_fg = "#4c1d95", "#ddd6fe"
-        elif "ERRORE" in level or "ASSENTE" in level or "PERDITA" in level:
-            b_bg, b_fg = "#7f1d1d", COL_ERR
-        elif level == "IN PAUSA":
-            b_bg, b_fg = "#1e3a5f", COL_ACCENT
+        # Pillola stato nella barra superiore
+        if st_running:
+            self.lbl_pill_status.configure(text="●  Test Velocità", bg="#3b0764", fg="#e9d5ff")
+        elif paused:
+            self.lbl_pill_status.configure(text="●  In Pausa", bg=BG_CARD, fg=FG_MUTED)
+        elif snap["sev"] == "ok":
+            self.lbl_pill_status.configure(text="●  Online", bg=STATUS_OK_BG, fg="#6ee7b7")
+        elif snap["sev"] == "warn":
+            self.lbl_pill_status.configure(text="●  Rallentata", bg=STATUS_WARN_BG, fg="#fde68a")
         else:
-            b_bg, b_fg = "#78350f", COL_WARN
-        self.lbl_badge.configure(text=f"  {level}  ", bg=b_bg, fg=b_fg)
+            self.lbl_pill_status.configure(text="●  Problema Rete", bg=STATUS_ERR_BG, fg="#fecaca")
 
+        # Contenuto Hero (con priorità temporanea allo Speedtest)
         if st_banner and time.time() < st_until:
-            sev, d_title, d_advice = st_banner
+            sev, icon, title, subtitle = st_banner
         else:
-            sev, d_title, d_advice = snap["diag_sev"], snap["diag_title"], snap["diag_advice"]
-
-        if sev == "ok":
-            d_bg, d_border, d_sub = "#052e26", COL_OK, "#a7f3d0"
-        elif sev == "warn":
-            d_bg, d_border, d_sub = "#451a03", COL_WARN, "#fde68a"
-        else:
-            d_bg, d_border, d_sub = "#450a0a", COL_ERR, "#fecaca"
-
-        self.diag_box.configure(bg=d_bg, highlightbackground=d_border)
-        self.lbl_diag_title.configure(text=d_title, bg=d_bg)
-        self.lbl_diag_advice.configure(text=d_advice, bg=d_bg, fg=d_sub)
+            sev, icon, title, subtitle = snap["sev"], snap["icon"], snap["title"], snap["subtitle"]
 
         i_ms = snap["inet_ms"]
         r_ms = snap["router_ms"]
+        down_mbps = snap["down_mbps"]
         down_mbs = snap["down_mbs"]
-        grade = snap["grade"]
-        warn_ms = snap["warn_ms"]
-        base_ms = snap["baseline_ms"]
+        loss_pct = snap["loss_pct"]
+        stability_pct = max(0, int(round(100.0 - loss_pct)))
 
-        # Aggiornamento Barra Compatta
-        i_str = f"{i_ms:.0f} ms" if i_ms is not None else "ASSENTE"
-        r_str = f"{r_ms:.0f} ms" if r_ms is not None else "ASSENTE"
-        self.lbl_compact_stats.configure(
-            text=f"Ping Internet: {i_str}   •   Modem: {r_str}   •   Download: {down_mbs:.1f} MB/s   •   {grade}"
+        # Vista Mini
+        self.lbl_compact_title.configure(text=f"{icon}  {title}")
+        p_txt = f"{i_ms:.0f} ms" if i_ms is not None else "Assente"
+        spd_txt = f"{st_live:.1f} Mbps" if st_running else f"{down_mbps:.1f} Mbps"
+        self.lbl_compact_metrics.configure(
+            text=f"Velocità: {spd_txt}   •   Ping: {p_txt}   •   Stabilità: {stability_pct}%"
         )
 
         if self.compact_mode:
             self.root.after(250, self._refresh_ui)
             return
 
-        # KPI 1: Internet + Baseline
-        if i_ms is not None:
-            i_col = COL_ERR if i_ms > 150 else (COL_WARN if i_ms > warn_ms else COL_ACCENT)
-            self.kpi_inet_val.configure(text=f"{i_ms:.0f} ms", fg=i_col)
-        else:
-            self.kpi_inet_val.configure(text="ASSENTE", fg=COL_ERR)
-        if min_lat is not None and max_lat is not None:
-            base_part = f"Base: {base_ms:.0f} ms • " if base_ms is not None else ""
-            self.kpi_inet_sub.configure(text=f"Min: {min_lat:.0f} • {base_part}Max: {max_lat:.0f} ms")
+        # Hero Card nella Home
+        self.lbl_hero_icon.configure(text=icon)
+        self.lbl_hero_title.configure(text=title)
+        self.lbl_hero_sub.configure(text=subtitle)
 
-        # KPI 2: Modem
-        if r_ms is not None:
-            self.kpi_router_val.configure(text=f"{r_ms:.0f} ms", fg=COL_WARN if r_ms > 20 else COL_OK)
-        else:
-            self.kpi_router_val.configure(text="ASSENTE", fg=COL_ERR)
-        self.kpi_router_sub.configure(text=f"Errori cavo/scheda: {snap['hw_errors']}")
-
-        # KPI 3: Velocità
-        up_mbs = snap["up_mbs"]
+        # Card 1: Velocità
         if st_running:
-            self.kpi_bw_val.configure(text=f"{st_live:.1f} Mbps", fg=COL_PURPLE)
-            self.kpi_bw_sub.configure(text=f"Test in corso ({down_mbs:.1f} MB/s)")
+            self.card_speed_val.configure(text=f"{st_live:.1f} Mbps", fg=ACCENT_CYAN)
+            self.card_speed_sub.configure(text="Misurazione massima in corso...")
         else:
-            self.kpi_bw_val.configure(text=f"↓ {down_mbs:.1f} MB/s", fg=COL_PURPLE if down_mbs > 0.5 else FG_TEXT)
+            self.card_speed_val.configure(
+                text=f"{down_mbps:.1f} Mbps",
+                fg=ACCENT_CYAN if down_mbps > 5.0 else FG_PRIMARY,
+            )
             if st_last is not None:
-                self.kpi_bw_sub.configure(text=f"Max test: {st_last:.1f} Mbps • ↑ {up_mbs:.1f} MB/s")
+                self.card_speed_sub.configure(text=f"Velocità max rilevata: {st_last:.1f} Mbps")
             else:
-                self.kpi_bw_sub.configure(text=f"↑ {up_mbs:.1f} MB/s • Tot: {self.total_rx_mb:.0f} MB")
+                self.card_speed_sub.configure(text=f"Traffico attuale: {down_mbs:.1f} MB/s")
 
-        # KPI 4: Jitter / Loss
-        jit = snap["jitter_ms"]
-        loss = snap["loss_pct"]
-        self.kpi_jitter_val.configure(
-            text=f"{jit:.1f} ms",
-            fg=COL_ERR if loss > 0 else (COL_WARN if jit > JITTER_WARN_MS else FG_TEXT),
-        )
-        self.kpi_jitter_sub.configure(text=f"Dati persi (25s): {loss:.0f}%")
-
-        # KPI 5: Voto / DNS
-        g_col = COL_OK if grade.startswith(("A", "B")) else (COL_WARN if grade.startswith("C") else COL_ERR)
-        self.kpi_grade_val.configure(text=grade, fg=g_col)
-        dns_ms = snap["dns_ms"]
-        self.kpi_grade_sub.configure(text=f"Risposta DNS: {dns_ms:.0f} ms" if dns_ms is not None else "DNS: Non risponde")
-
-        # Check-up Semaforo
-        self.chk_nic[0].configure(
-            text="🟢 Attiva" if snap["hw_errors"] == 0 else f"🟡 {snap['hw_errors']} errori",
-            fg=COL_OK if snap["hw_errors"] == 0 else COL_WARN,
-        )
-        self.chk_modem[0].configure(
-            text=f"🟢 OK ({r_ms:.0f} ms)" if r_ms is not None else "🔴 Irraggiungibile",
-            fg=COL_OK if r_ms is not None else COL_ERR,
-        )
-        if i_ms is None or loss > 0:
-            self.chk_wan[0].configure(text="🔴 Instabile / Assente", fg=COL_ERR)
-        elif i_ms > warn_ms:
-            self.chk_wan[0].configure(text=f"🟡 Rallentata ({i_ms:.0f} ms)", fg=COL_WARN)
+        # Card 2: Ping
+        if i_ms is not None:
+            p_col = STATUS_ERR if i_ms > 150 else (STATUS_WARN if i_ms > snap["warn_ms"] else FG_PRIMARY)
+            self.card_ping_val.configure(text=f"{i_ms:.0f} ms", fg=p_col)
         else:
-            self.chk_wan[0].configure(text=f"🟢 Fluida ({i_ms:.0f} ms)", fg=COL_OK)
+            self.card_ping_val.configure(text="Assente", fg=STATUS_ERR)
+        r_txt = f"Modem in casa: {r_ms:.0f} ms" if r_ms is not None else "Modem non raggiungibile"
+        self.card_ping_sub.configure(text=r_txt)
 
-        self.chk_dns[0].configure(
-            text=f"🟢 OK ({dns_ms:.0f} ms)" if dns_ms is not None else "🔴 Errore DNS",
-            fg=COL_OK if dns_ms is not None else COL_ERR,
+        # Card 3: Stabilità
+        s_col = STATUS_OK if stability_pct == 100 else (STATUS_WARN if stability_pct >= 90 else STATUS_ERR)
+        self.card_stab_val.configure(text=f"{stability_pct}%", fg=s_col)
+        self.card_stab_sub.configure(text=f"Qualità linea: {snap['grade']}")
+
+        # Nodi nella scheda "Ripara & DNS"
+        self.node_nic[0].configure(
+            text="🟢 Funziona" if snap["hw_errors"] == 0 else f"🟡 {snap['hw_errors']} errori",
+            fg=STATUS_OK if snap["hw_errors"] == 0 else STATUS_WARN,
+        )
+        self.node_modem[0].configure(
+            text=f"🟢 OK ({r_ms:.0f} ms)" if r_ms is not None else "🔴 Irraggiungibile",
+            fg=STATUS_OK if r_ms is not None else STATUS_ERR,
+        )
+        if i_ms is None or loss_pct > 0:
+            self.node_wan[0].configure(text="🔴 Instabile", fg=STATUS_ERR)
+        elif i_ms > snap["warn_ms"]:
+            self.node_wan[0].configure(text=f"🟡 Lenta ({i_ms:.0f} ms)", fg=STATUS_WARN)
+        else:
+            self.node_wan[0].configure(text=f"🟢 Veloce ({i_ms:.0f} ms)", fg=STATUS_OK)
+
+        dns_ms = snap["dns_ms"]
+        self.node_dns[0].configure(
+            text=f"🟢 OK ({dns_ms:.0f} ms)" if dns_ms is not None else "🔴 Bloccati",
+            fg=STATUS_OK if dns_ms is not None else STATUS_ERR,
         )
 
-        # Tabella programmi
-        for item in self.tree_procs.get_children():
-            self.tree_procs.delete(item)
-        for name, kind, tot_c in procs:
-            self.tree_procs.insert("", "end", values=(name, kind, tot_c))
+        # Tabella programmi & Log
+        if self.active_page == "details":
+            for item in self.tree_procs.get_children():
+                self.tree_procs.delete(item)
+            for name, kind, tot_c in procs:
+                self.tree_procs.insert("", "end", values=(name, kind, tot_c))
 
-        # Log
         if logs_to_flush:
             self.txt_log.configure(state="normal")
             for lvl, text in logs_to_flush:
-                tag = "ERR" if "ERRORE" in lvl or "ASSENTE" in lvl or "PERDITA" in lvl else (
-                    "WARN" if "RALLENTAMENTO" in lvl or "FIX" in lvl else ("OK" if lvl in ("OK", "SPEEDTEST") else "INFO")
-                )
+                tag = lvl if lvl in ("ERR", "WARN", "OK", "INFO") else "INFO"
                 self.txt_log.insert("end", text + "\n", tag)
             self.txt_log.see("end")
             self.txt_log.configure(state="disabled")
 
-        self._draw_chart()
+        if self.active_page == "home":
+            self._draw_area_chart()
+
         self.root.after(250, self._refresh_ui)
 
-    def _draw_chart(self) -> None:
+    def _draw_area_chart(self) -> None:
         c = self.canvas
         w = c.winfo_width()
         h = c.winfo_height()
-        if w < 60 or h < 80:
+        if w < 80 or h < 60:
             return
 
         c.delete("all")
 
         with self.lock:
-            inet_pts = list(self.hist_internet)
-            rout_pts = list(self.hist_router)
-            jitt_pts = list(self.hist_jitter)
-            down_pts = list(self.hist_down_mbps)
-            warn_ms = self.latest_snapshot["warn_ms"]
+            pts = list(self.hist_internet)
 
-        pad_l, pad_r, pad_t, pad_b = 46, 14, 14, 22
-        split_gap = 12
-        total_h = h - pad_t - pad_b - split_gap
-        ping_h = total_h * 0.72
-        bw_h = total_h * 0.28
-        bw_top = pad_t + ping_h + split_gap
+        pad_l, pad_r, pad_t, pad_b = 44, 16, 14, 24
         plot_w = w - pad_l - pad_r
+        plot_h = h - pad_t - pad_b
 
-        valid_vals = [v for v in inet_pts + jitt_pts if v is not None]
-        max_y = max(140.0, (max(valid_vals) * 1.15) if valid_vals else 140.0)
+        valid = [v for v in pts if v is not None]
+        max_y = max(100.0, (max(valid) * 1.2) if valid else 100.0)
         max_y = float(((int(max_y) + 49) // 50) * 50)
 
-        def y_ping(val: float) -> float:
+        def y_pos(val: float) -> float:
             clamped = max(0.0, min(val, max_y))
-            return pad_t + ping_h - (clamped / max_y) * ping_h
+            return pad_t + plot_h - (clamped / max_y) * plot_h
 
-        for i in range(4):
-            val = (max_y / 3) * i
-            y = y_ping(val)
-            c.create_line(pad_l, y, w - pad_r, y, fill="#162032", width=1)
-            c.create_text(pad_l - 6, y, text=f"{int(val)}ms", fill=FG_MUTED, anchor="e", font=("Consolas", 8))
+        # Griglia orizzontale minimale
+        for i in range(3):
+            val = (max_y / 2) * i
+            y = y_pos(val)
+            c.create_line(pad_l, y, w - pad_r, y, fill="#1e293b", width=1)
+            c.create_text(pad_l - 8, y, text=f"{int(val)} ms", fill=FG_MUTED, anchor="e", font=("Segoe UI", 8))
 
-        if warn_ms <= max_y:
-            y_warn = y_ping(warn_ms)
-            c.create_line(pad_l, y_warn, w - pad_r, y_warn, fill=COL_ERR, dash=(4, 4), width=1)
-            c.create_text(w - pad_r - 4, y_warn - 8, text=f"Soglia dinamica ({warn_ms:.0f}ms)", fill=COL_ERR, anchor="e", font=("Segoe UI", 7, "bold"))
-
-        n = len(inet_pts)
+        n = len(pts)
         if n >= 2:
-            def plot_line(series: list[float | None], color: str, width: int = 2, mark_timeouts: bool = False) -> None:
-                seg: list[float] = []
-                for idx, val in enumerate(series):
-                    x = pad_l + (idx / (n - 1)) * plot_w
-                    if val is None:
-                        if len(seg) >= 4:
-                            c.create_line(*seg, fill=color, width=width)
-                        seg = []
-                        if mark_timeouts and idx > 0 and any(v is not None for v in series[:idx]):
-                            c.create_oval(x - 3, pad_t + 2, x + 3, pad_t + 8, fill=COL_ERR, outline="")
-                    else:
-                        seg.extend([x, y_ping(val)])
-                if len(seg) >= 4:
-                    c.create_line(*seg, fill=color, width=width)
-
-            plot_line(rout_pts, COL_OK, width=2)
-            plot_line(jitt_pts, COL_WARN, width=2)
-            plot_line(inet_pts, COL_ACCENT, width=2, mark_timeouts=True)
-
-        c.create_line(pad_l, bw_top, w - pad_r, bw_top, fill="#1e293b", width=1)
-        max_bw = max(5.0, max(down_pts) * 1.15 if down_pts else 5.0)
-        c.create_text(pad_l - 6, bw_top + 6, text=f"{max_bw:.0f}MB", fill=COL_PURPLE, anchor="e", font=("Consolas", 7))
-        c.create_text(pad_l - 6, bw_top + bw_h, text="0", fill=FG_MUTED, anchor="e", font=("Consolas", 7))
-
-        if n >= 2:
-            bar_w = max(2.0, (plot_w / n) * 0.72)
-            for idx, mb in enumerate(down_pts):
-                if mb <= 0.02:
-                    continue
+            segments: list[list[tuple[float, float]]] = []
+            cur_seg: list[tuple[float, float]] = []
+            for idx, val in enumerate(pts):
                 x = pad_l + (idx / (n - 1)) * plot_w
-                bar_h = min(bw_h, (mb / max_bw) * bw_h)
-                c.create_rectangle(
-                    x - bar_w / 2,
-                    bw_top + bw_h - bar_h,
-                    x + bar_w / 2,
-                    bw_top + bw_h,
-                    fill="#6d28d9",
-                    outline="",
-                )
+                if val is None:
+                    if cur_seg:
+                        segments.append(cur_seg)
+                        cur_seg = []
+                else:
+                    cur_seg.append((x, y_pos(val)))
+            if cur_seg:
+                segments.append(cur_seg)
 
-        c.create_text(pad_l, h - 8, text="90 sec fa", fill=FG_MUTED, anchor="w", font=("Consolas", 8))
-        c.create_text(pad_l + plot_w / 2, h - 8, text="45 sec fa", fill=FG_MUTED, anchor="center", font=("Consolas", 8))
-        c.create_text(w - pad_r, h - 8, text="Adesso", fill=FG_MUTED, anchor="e", font=("Consolas", 8))
+            base_y = pad_t + plot_h
+            for seg in segments:
+                if len(seg) >= 2:
+                    poly_coords = [seg[0][0], base_y]
+                    for px, py in seg:
+                        poly_coords.extend([px, py])
+                    poly_coords.extend([seg[-1][0], base_y])
+                    c.create_polygon(*poly_coords, fill="#172a4a", outline="")
+
+                    line_coords = []
+                    for px, py in seg:
+                        line_coords.extend([px, py])
+                    c.create_line(*line_coords, fill=ACCENT_CYAN, width=2.5, smooth=True)
+                elif len(seg) == 1:
+                    px, py = seg[0]
+                    c.create_oval(px - 3, py - 3, px + 3, py + 3, fill=ACCENT_CYAN, outline="")
+
+        c.create_text(pad_l, h - 9, text="1 minuto fa", fill=FG_MUTED, anchor="w", font=("Segoe UI", 8))
+        c.create_text(w - pad_r, h - 9, text="Adesso", fill=FG_MUTED, anchor="e", font=("Segoe UI", 8))
 
     def _on_close(self) -> None:
         self.running = False

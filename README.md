@@ -1,20 +1,17 @@
 ﻿# Dottor Modem
 
-Strumento desktop per **Windows** scritto in Python puro (zero dipendenze esterne) per diagnosticare in tempo reale latenza, bufferbloat, packet loss, DNS e utilizzo della banda.
+Strumento desktop per **Windows** scritto in Python puro (zero dipendenze esterne) con interfaccia moderna e intuitiva per diagnosticare in tempo reale velocità, reattività, stabilità della linea e DNS.
 
-## Funzionalità Principali
-- **Sonde Native Windows (`iphlpapi.dll`):** Esegue ping ICMP (`IcmpSendEcho`) e legge i contatori di traffico delle schede (`GetIfTable`) direttamente in memoria a 1 Hz senza avviare processi esterni.
-- **Diagnosi Dinamica in Italiano:** Apprende la baseline a riposo della linea e distingue automaticamente tra guasto del modem locale, disconnessione ISP, problemi DNS o saturazione da download.
-- **Modalità Compatta (Mini-Monitor):** Riduce l'interfaccia a una barra essenziale fissabile in primo piano mentre lavori o scarichi.
-- **Cambio DNS Rapido:** Alterna con un clic tra **Cloudflare (`1.1.1.1`)**, **Google (`8.8.8.8`)** e **DHCP automatico**, con svuotamento della cache DNS.
-- **Speedtest & Bufferbloat (5s):** Misura la velocità reale in Mbps e verifica l'aumento di latenza sotto carico.
-- **Tracciamento Nodi (`Tracert`) & Monitor Processi:** Isola i rallentamenti tra modem locale, centrale dell'operatore e dorsale Internet.
+## Caratteristiche Principali
+- **Interfaccia a 3 Schede Pulite:**
+  - **Panoramica:** Stato della linea in linguaggio chiaro, test velocità rapido di 5 secondi, 3 metriche chiave (*Velocità in Mbps*, *Reattività Ping*, *Stabilità %*) e grafico ad area.
+  - **Ripara & DNS:** Mappa visiva del percorso di rete (`PC ➔ Modem ➔ Internet ➔ Siti Web`) e cambio rapido tra **Cloudflare (`1.1.1.1`)**, **Google (`8.8.8.8`)** e **Automatico**.
+  - **Dettagli:** Monitoraggio applicazioni connesse ed esportazione telemetria in CSV (`dottor_modem_log.csv`).
+- **Modalità Mini-Monitor:** Riduce l'app a una piccola barra fissabile in primo piano.
+- **Sonde Native Windows (`iphlpapi.dll`):** Ping ICMP e lettura contatori di rete direttamente in memoria senza processi esterni.
 
-## Struttura del Progetto
-```text
-├── main.py                  # Punto di ingresso dell'applicazione
-├── core/
-│   ├── probes.py            # API native Windows, speedtest, tracert e gestione DNS
-│   └── diagnostics.py       # Motore diagnostico, baseline dinamica e logger CSV bufferizzato
-└── ui/
-    └── dashboard.py         # Interfaccia desktop tkinter, modalità compatta e grafico real-time
+## Avvio Rapido
+Richiede **Python 3.10+** su Windows 10/11 (nessun pacchetto esterno necessario):
+
+```powershell
+python main.py
