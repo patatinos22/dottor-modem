@@ -1,7 +1,10 @@
-﻿"""Launcher Ottimizzatore - Dottor Modem v12."""
-import ctypes, sys, tkinter as tk
+﻿"""Launcher con shell Apple-style."""
+import ctypes, sys, os, traceback
+import tkinter as tk
 from tkinter import messagebox
-import customtkinter as ctk
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(_HERE, "dottor_modem_error.log")
 
 
 def is_admin():
@@ -9,28 +12,29 @@ def is_admin():
     except Exception: return False
 
 
-def ensure_admin():
-    if is_admin(): return
-    root = tk.Tk(); root.withdraw()
-    if messagebox.askyesno("Permessi", "Riavviare come Amministratore?"):
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, '"' + __file__ + '"', None, 1)
-    root.destroy(); sys.exit(0)
+def relaunch():
+    script = os.path.abspath(sys.argv[0])
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{script}"', _HERE, 1)
+    if ret <= 32:
+        r = tk.Tk(); r.withdraw()
+        messagebox.showerror("Errore", "Avvia PowerShell come Amministratore e digita:\npython main_optimizer.py")
+        r.destroy()
+    sys.exit(0)
 
 
 def main():
-    ensure_admin()
-    from ui.optimizer_tab import OptimizerTab
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
-    app = ctk.CTk()
-    app.title("Dottor Modem - Ottimizzatore")
-    app.configure(fg_color="#111827")
-    w, h = 1100, 820
-    sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
-    app.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
-    app.minsize(1000, 720)
-    OptimizerTab(app).pack(fill="both", expand=True)
-    app.mainloop()
+    try:
+        if not is_admin():
+            relaunch()
+            return
+        from ui.app_shell import AppShell
+        AppShell().mainloop()
+    except Exception:
+        tb = traceback.format_exc()
+        with open(LOG, "w", encoding="utf-8") as f: f.write(tb)
+        r = tk.Tk(); r.withdraw()
+        messagebox.showerror("Errore", tb[:800] + "\n\nLog: " + LOG)
+        r.destroy()
 
 
 if __name__ == "__main__":
