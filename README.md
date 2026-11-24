@@ -1,17 +1,16 @@
-﻿# Dottor Modem
+﻿# Dottor Modem v10.0
 
-Strumento desktop per **Windows** scritto in Python puro (zero dipendenze esterne) con interfaccia moderna e intuitiva per diagnosticare in tempo reale velocità, reattività, stabilità della linea e DNS.
+Strumento desktop per **Windows** scritto in Python puro (**zero dipendenze esterne**) con interfaccia moderna e intuitiva per diagnosticare in tempo reale velocità, reattività, Wi-Fi, percorsi di rete MTR e DNS.
 
-## Caratteristiche Principali
-- **Interfaccia a 3 Schede Pulite:**
-  - **Panoramica:** Stato della linea in linguaggio chiaro, test velocità rapido di 5 secondi, 3 metriche chiave (*Velocità in Mbps*, *Reattività Ping*, *Stabilità %*) e grafico ad area.
-  - **Ripara & DNS:** Mappa visiva del percorso di rete (`PC ➔ Modem ➔ Internet ➔ Siti Web`) e cambio rapido tra **Cloudflare (`1.1.1.1`)**, **Google (`8.8.8.8`)** e **Automatico**.
-  - **Dettagli:** Monitoraggio applicazioni connesse ed esportazione telemetria in CSV (`dottor_modem_log.csv`).
-- **Modalità Mini-Monitor:** Riduce l'app a una piccola barra fissabile in primo piano.
-- **Sonde Native Windows (`iphlpapi.dll`):** Ping ICMP e lettura contatori di rete direttamente in memoria senza processi esterni.
+## Novità Principali (v10.0)
+- **Diagnosi Wi-Fi & Doppio Bufferbloat:** Rileva qualità del segnale Wi-Fi (`%`) e banda (`2.4 GHz` / `5 GHz`), distinguendo durante lo Speedtest se un eventuale rallentamento sotto carico nasce in casa (Wi-Fi/Router) oppure sulla linea dell'operatore (ISP).
+- **Profili Server Gaming:** Test di latenza selezionabili verso **Cloudflare**, **Google**, **Quad9**, **Valorant EU**, **CS2 EU** e **AWS Francoforte**.
+- **MTR Live Continuo:** Sonda ogni `1.5s` in parallelo tutti gli hop (`TTL 1..8`) tramite `iphlpapi.dll`, calcolando perdita pacchetti `%`, ping attuale e media per ogni nodo.
+- **System Tray & Notifiche Native Windows:** Si riduce nell'area di notifica accanto all'orologio con icona di stato dinamica (verde/gialla/rossa), menu rapido e notifiche desktop su disconnessione, ripristino e speedtest.
 
 ## Avvio Rapido
-Richiede **Python 3.10+** su Windows 10/11 (nessun pacchetto esterno necessario):
+Richiede **Python 3.10+** su Windows 10/11 (nessun pacchetto `pip` necessario):
 
 ```powershell
 python main.py
+
