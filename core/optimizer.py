@@ -207,3 +207,28 @@ class NetworkOptimizer:
             except Exception:
                 pass
         return results
+
+    def set_timer_resolution(self, ms: float = 0.5) -> OptimizationResult:
+        ps = (
+            "Add-Type -TypeDefinition @`"`n"
+            "using System;using System.Runtime.InteropServices;`n"
+            "public class T{[DllImport(`"ntdll.dll`")]public static extern int NtSetTimerResolution(uint DesiredResolution,bool SetResolution,out uint CurrentResolution);}`n"
+            "`"@; $c=0;[T]::NtSetTimerResolution([uint32](5000),$true,[ref]$c)|Out-Null; 'OK'"
+        )
+        rc, out, _ = _run_ps(ps)
+        ok = rc == 0 and "OK" in out
+        return OptimizationResult("Timer 0.5 ms", ok,
+                                  "Timer di sistema a 0.5 ms (riduce input lag)." if ok else "Errore timer.")
+
+    def run_speedtest(self) -> dict:
+        try:
+            import speedtest
+            st = speedtest.Speedtest()
+            st.get_best_server()
+            d = st.download() / 1_000_000
+            u = st.upload() / 1_000_000
+            p = st.results.ping
+            return {"download": round(d, 1), "upload": round(u, 1), "ping": round(p, 0), "ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
