@@ -1,6 +1,6 @@
 ﻿"""
-main_optimizer.py - Dottor Modem v11.0
-Launcher standalone per la scheda Ottimizzatore (chiede UAC automatico).
+main_optimizer.py - Dottor Modem v11.1
+Launcher standalone dell'Ottimizzatore (UAC automatico, UI ridisegnata).
 """
 from __future__ import annotations
 
@@ -22,8 +22,11 @@ def ensure_admin():
         return
     root = tk.Tk()
     root.withdraw()
-    ok = messagebox.askyesno("Privilegi richiesti",
-                             "L'Ottimizzatore richiede privilegi amministratore.\nRiavviare?")
+    ok = messagebox.askyesno(
+        "Permessi richiesti",
+        "L'Ottimizzatore deve poter modificare le impostazioni di rete.\n\n"
+        "Vuoi riavviarlo come Amministratore?"
+    )
     if ok:
         ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, '"' + __file__ + '"', None, 1
@@ -35,13 +38,23 @@ def ensure_admin():
 def main():
     ensure_admin()
     from ui.optimizer_tab import OptimizerTab
+
     root = tk.Tk()
     root.title("Dottor Modem - Ottimizzatore Rete")
-    root.geometry("900x700")
+    root.configure(bg="#f4f6fa")
+
+    # Centra la finestra 1100x780
+    w, h = 1100, 780
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    x, y = (sw - w) // 2, (sh - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+    root.minsize(950, 700)
+
     try:
-        ttk.Style().theme_use("vista")
+        ttk.Style().theme_use("clam")
     except tk.TclError:
         pass
+
     OptimizerTab(root).pack(fill="both", expand=True)
     root.mainloop()
 

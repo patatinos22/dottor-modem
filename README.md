@@ -1,4 +1,4 @@
-﻿# Dottor Modem v10.0
+﻿# Dottor Modem v11.1
 
 Strumento desktop per **Windows** scritto in Python puro (**zero dipendenze esterne**) con interfaccia moderna e intuitiva per diagnosticare in tempo reale velocità, reattività, Wi-Fi, percorsi di rete MTR e DNS.
 
