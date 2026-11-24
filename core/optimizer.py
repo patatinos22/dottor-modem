@@ -150,18 +150,31 @@ class NetworkOptimizer:
                                   "Policy QoS rimossa." if rc == 0 else "Errore.")
 
     def optimize_nic(self) -> OptimizationResult:
-        ps = (
-            "$adapters = Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' }; "
-            "$results = @(); "
-            "foreach ($a in $adapters) { "
-            "try { Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -ErrorAction Stop; $results += ($a.Name + ':power=OFF') } catch {} "
-            "try { Set-NetAdapterAdvancedProperty -Name $a.Name -DisplayName 'Energy-Efficient Ethernet' -DisplayValue 'Disabled' -ErrorAction Stop; $results += ($a.Name + ':EEE=OFF') } catch {} "
-            "} "
-            "if ($results.Count -eq 0) { 'NO_CHANGES' } else { $results -join '; ' }"
-        )
+        ps = """
+$results=@()
+$adapters=Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' }
+foreach($a in $adapters){
+    $props=Get-NetAdapterAdvancedProperty -Name $a.Name -EA SilentlyContinue
+    $changed=@()
+    $names=@('Energy-Efficient Ethernet','Energy Efficient Ethernet','Green Ethernet','Ultra Low Power Mode')
+    foreach($n in $names){
+        $p=$props|Where-Object{$_.DisplayName -eq $n}|Select-Object -First 1
+        if($p){try{Set-NetAdapterAdvancedProperty -Name $a.Name -DisplayName $n -DisplayValue 'Disabled' -EA Stop;$changed+=$n}catch{}}
+    }
+    $pw=Get-NetAdapterPowerManagement -Name $a.Name -EA SilentlyContinue
+    if($pw){try{Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -EA Stop;$changed+='PowerSave'}catch{}}
+    if($changed.Count -gt 0){$results+=($a.Name+': '+($changed -join ', '))}
+}
+if($results.Count -eq 0){'NO_CHANGES'}else{$results -join '; '}
+"""
         rc, out, err = _run_ps(ps, timeout=60)
-        return OptimizationResult("Ottimizzazione scheda di rete", rc == 0,
-                                  out if rc == 0 else (err or "Errore."))
+        if rc != 0:
+            return OptimizationResult("Scheda di rete", False, err or "Errore PowerShell.")
+        if "NO_CHANGES" in out:
+            return OptimizationResult("Scheda di rete", True,
+                "La tua scheda di rete non ha opzioni di risparmio energetico da disattivare: e' gia' ottimizzata.")
+        return OptimizationResult("Scheda di rete", True, out)
+
 
     def set_dns_cloudflare(self) -> OptimizationResult:
         ps = (
@@ -209,16 +222,44 @@ class NetworkOptimizer:
         return results
 
     def set_timer_resolution(self, ms: float = 0.5) -> OptimizationResult:
-        ps = (
-            "Add-Type -TypeDefinition @`"`n"
-            "using System;using System.Runtime.InteropServices;`n"
-            "public class T{[DllImport(`"ntdll.dll`")]public static extern int NtSetTimerResolution(uint DesiredResolution,bool SetResolution,out uint CurrentResolution);}`n"
-            "`"@; $c=0;[T]::NtSetTimerResolution([uint32](5000),$true,[ref]$c)|Out-Null; 'OK'"
-        )
-        rc, out, _ = _run_ps(ps)
-        ok = rc == 0 and "OK" in out
-        return OptimizationResult("Timer 0.5 ms", ok,
-                                  "Timer di sistema a 0.5 ms (riduce input lag)." if ok else "Errore timer.")
+        """Imposta NtSetTimerResolution in modo persistente (thread keeper)."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            ntdll = ctypes.WinDLL("ntdll")
+            ntdll.NtSetTimerResolution.argtypes = [wintypes.ULONG, wintypes.BOOLEAN, ctypes.POINTER(wintypes.ULONG)]
+            target = int(ms * 10000)
+            current = wintypes.ULONG()
+            status = ntdll.NtSetTimerResolution(target, True, ctypes.byref(current))
+            if status != 0:
+                return OptimizationResult("Timer", False,
+                    "Windows ha rifiutato (NTSTATUS 0x" + format(status & 0xFFFFFFFF, "08X") + ").")
+            actual = current.value / 10000.0
+            self._timer_active = True
+            self._start_timer_keeper()
+            return OptimizationResult("Timer", True,
+                "Timer a " + str(round(actual, 2)) + " ms. Input lag ridotto (resta attivo finche' l'app e' aperta).")
+        except Exception as e:
+            return OptimizationResult("Timer", False, str(e))
+
+    def _start_timer_keeper(self):
+        if getattr(self, "_timer_keeper", None) is not None:
+            return
+        import threading, time as _t, ctypes
+        from ctypes import wintypes
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtSetTimerResolution.argtypes = [wintypes.ULONG, wintypes.BOOLEAN, ctypes.POINTER(wintypes.ULONG)]
+        def loop():
+            while getattr(self, "_timer_active", False):
+                try:
+                    c = wintypes.ULONG()
+                    ntdll.NtSetTimerResolution(5000, True, ctypes.byref(c))
+                except Exception:
+                    pass
+                _t.sleep(5)
+        self._timer_keeper = threading.Thread(target=loop, daemon=True)
+        self._timer_keeper.start()
+
 
     def run_speedtest(self) -> dict:
         try:
@@ -231,4 +272,5 @@ class NetworkOptimizer:
             return {"download": round(d, 1), "upload": round(u, 1), "ping": round(p, 0), "ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
 
