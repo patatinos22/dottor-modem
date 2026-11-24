@@ -130,6 +130,9 @@ def _create_circle_hicon(r: int, g: int, b: int) -> wintypes.HICON:
 
 
 class WinSystemTray:
+    # Metti True per riattivare i popup (balloon) di Windows
+    NOTIFICATIONS_ENABLED = False
+
     COLORS = {"ok": (16, 185, 129), "warn": (245, 158, 11), "err": (239, 68, 68)}
 
     def __init__(self, on_open, on_speedtest, on_cycle_dns, on_exit) -> None:
@@ -238,7 +241,7 @@ class WinSystemTray:
             pass
 
     def notify(self, title: str, message: str, level: str = "info") -> None:
-        if not self.active or not self.hwnd:
+        if not self.NOTIFICATIONS_ENABLED or not self.active or not self.hwnd:
             return
         flag = NIIF_ERROR if level == "err" else (NIIF_WARNING if level == "warn" else NIIF_INFO)
         try:
