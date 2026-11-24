@@ -14,3 +14,19 @@ Richiede **Python 3.10+** su Windows 10/11 (nessun pacchetto `pip` necessario):
 ```powershell
 python main.py
 
+```
+
+
+## Ottimizzatore Rete (novita v11.0)
+
+Nuova scheda **Ottimizzatore** (standalone con `python main_optimizer.py`) che aggiunge interventi *attivi* alla sola diagnosi:
+
+- **Algoritmo di Nagle off** (`TcpAckFrequency` + `TCPNoDelay`) - riduce la latenza TCP nei giochi.
+- **QoS / DSCP tagging** tramite `New-NetQosPolicy` (EF 46 gaming, AF41 34 streaming).
+- **Scheda di rete**: disattiva risparmio energetico e Energy-Efficient Ethernet.
+- **DNS Cloudflare** (1.1.1.1 / 1.0.0.1) sull'adattatore attivo.
+- **Profili rapidi**: Gaming, Download, Streaming, Quotidiano.
+- **Rollback completo** alle impostazioni predefinite.
+
+Backup automatico in `%USERPROFILE%\DottorModem_Backups\backup_YYYYMMDD_HHMMSS.json`.
+Richiede privilegi di amministratore. Riavvia il PC dopo aver disattivato Nagle.
