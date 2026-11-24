@@ -183,7 +183,7 @@ def get_current_dns_servers(iface_name: str) -> list[str]:
 
 def describe_dns_provider(servers: list[str]) -> tuple[str, str]:
     if not servers:
-        return "Automatico (Router/DHCP)", "other"
+        return "Automatico (DHCP)", "dhcp"
     primary = servers[0]
     joined = ", ".join(servers[:2])
     if primary in ("8.8.8.8", "8.8.4.4"):
@@ -191,8 +191,8 @@ def describe_dns_provider(servers: list[str]) -> tuple[str, str]:
     if primary in ("1.1.1.1", "1.0.0.1"):
         return f"Cloudflare ({joined})", "cloudflare"
     if primary.startswith("192.168.") or primary.startswith("10."):
-        return f"Operatore / Router ({joined})", "other"
-    return f"Personalizzato ({joined})", "other"
+        return f"Router ({joined})", "dhcp"
+    return f"Custom ({joined})", "dhcp"
 
 
 def probe_dns(domain: str = DNS_TEST_DOMAIN) -> float | None:
@@ -330,7 +330,7 @@ def run_speedtest_stream(
         try:
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DottorModem/7.2"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DottorModem/8.0"},
             )
             with urllib.request.urlopen(req, timeout=4.0, context=ctx) as resp:
                 t_start = time.perf_counter()

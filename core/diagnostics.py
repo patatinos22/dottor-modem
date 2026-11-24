@@ -2,14 +2,39 @@
 import csv
 from datetime import datetime
 import os
+import statistics
 import threading
 import time
 
-LATENCY_WARN_MS = 100.0
+DEFAULT_LATENCY_WARN_MS = 100.0
 JITTER_WARN_MS = 30.0
 MAX_CONSECUTIVE_FAILS = 10
 RESET_COOLDOWN_SEC = 60.0
 LOG_FILE = "dottor_modem_log.csv"
+
+
+class BaselineTracker:
+    """Apprende il ping reale a riposo della linea per adattare automaticamente le soglie di allarme."""
+
+    def __init__(self, maxlen: int = 40) -> None:
+        self.calm_samples: deque[float] = deque(maxlen=maxlen)
+
+    def update(self, inet_ms: float | None, down_mbs: float, loss_pct: float) -> None:
+        if inet_ms is not None and down_mbs < 0.5 and loss_pct == 0.0:
+            self.calm_samples.append(inet_ms)
+
+    @property
+    def baseline_ms(self) -> float | None:
+        if len(self.calm_samples) < 3:
+            return None
+        return float(statistics.median(self.calm_samples))
+
+    @property
+    def dynamic_warn_ms(self) -> float:
+        base = self.baseline_ms
+        if base is None:
+            return DEFAULT_LATENCY_WARN_MS
+        return max(70.0, min(130.0, base * 2.6))
 
 
 def compute_line_grade(latencies: deque[float], jitters: deque[float], outcomes: deque[bool]) -> str:
@@ -44,6 +69,7 @@ def build_human_diagnosis(
     dns_ms: float | None,
     down_mbs: float,
     top_app: str,
+    warn_threshold_ms: float = DEFAULT_LATENCY_WARN_MS,
 ) -> tuple[str, str, str]:
     """Restituisce (severita: 'ok'|'warn'|'err', titolo_diagnostica, consiglio_pratico)."""
     if r_ms is None:
@@ -62,7 +88,7 @@ def build_human_diagnosis(
         return (
             "warn",
             "⚠️ Linea attiva, ma i server DNS non traducono i siti web",
-            "Internet funziona ma i siti non si aprono. Usa il pulsante 'Alterna Google / Cloudflare' in alto per cambiare DNS subito.",
+            "Internet funziona ma i siti non si aprono. Clicca su 'Cambia DNS' in alto per passare subito a Cloudflare o Google.",
         )
     if loss_pct > 0:
         return (
@@ -70,7 +96,7 @@ def build_human_diagnosis(
             f"🚨 Perdita di pacchetti rilevata ({loss_pct:.0f}% dei dati persi)",
             "La connessione sta scartando dati. Se stai scaricando file pesanti limita la banda, altrimenti controlla il cavo di rete.",
         )
-    if i_ms > LATENCY_WARN_MS or jitter > JITTER_WARN_MS:
+    if i_ms > warn_threshold_ms or jitter > JITTER_WARN_MS:
         if down_mbs >= 2.0:
             app_hint = f" ({top_app})" if top_app else ""
             return (
@@ -80,13 +106,13 @@ def build_human_diagnosis(
             )
         return (
             "warn",
-            f"⚠️ Latenza alta ({i_ms:.0f} ms) o segnale instabile (Jitter {jitter:.0f} ms)",
-            "Il modem in casa risponde bene, ma la rete dell'operatore è lenta in questo momento. Prova 'Controlla Nodi' per vedere dove rallenta.",
+            f"⚠️ Latenza sopra la media ({i_ms:.0f} ms) o segnale instabile (Jitter {jitter:.0f} ms)",
+            "Il modem in casa risponde bene, ma la rete dell'operatore è rallentata in questo momento. Usa 'Controlla Nodi' per verificare dove rallenta.",
         )
     return (
         "ok",
         "✅ Connessione Ottima e Reattiva — Nessun collo di bottiglia rilevato",
-        f"Sia il modem locale ({r_ms:.0f} ms) sia Internet ({i_ms:.0f} ms) rispondono velocemente senza perdita di dati.",
+        f"Modem locale ({r_ms:.0f} ms) e Internet ({i_ms:.0f} ms) rispondono velocemente senza perdita di dati.",
     )
 
 
